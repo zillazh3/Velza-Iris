@@ -18,6 +18,7 @@
   } from "@lucide/svelte";
   import { api, approxMm, type Preset, type Status } from "$lib/api";
   import { i18n, t, type Key } from "$lib/i18n/index.svelte";
+  import MotionPanel from "$lib/MotionPanel.svelte";
 
   type Category = Preset["category"];
 
@@ -26,6 +27,8 @@
   let message = $state<{ text: string; ok: boolean } | null>(null);
   let selected = $state<"all" | Category>("all");
   // ponytail: el estado del sidebar no se guarda entre sesiones (igual que el idioma).
+  // Movimientos + turnaround (el panel los lista); cuentan en la categoría Movimiento.
+  let motionCount = $state(0);
   let collapsed = $state(false);
   let narrow = $state(false);
   const rail = $derived(collapsed || narrow);
@@ -41,7 +44,9 @@
     ref_sheet: Grid3x3,
   } as const;
 
-  const count = (c: "all" | Category) => (c === "all" ? presets.length : presets.filter((p) => p.category === c).length);
+  const count = (c: "all" | Category) =>
+    (c === "all" ? presets.length : presets.filter((p) => p.category === c).length) +
+    (c === "all" || c === "movimiento" ? motionCount : 0);
   const groups = $derived(
     categories
       .filter((c) => selected === "all" || c === selected)
@@ -80,6 +85,7 @@
       presets = lib.presets;
       if (lib.warnings.length) throw lib.warnings.join("\n");
     });
+    api.listMotions().then((m) => (motionCount = m.length + 1)).catch(() => {});
     tick();
     const id = setInterval(tick, 1000);
     // Ventana angosta: el sidebar queda compacto sin importar la preferencia.
@@ -183,7 +189,9 @@
       </button>
     </section>
 
-    <h2 class="section">{selected === "all" ? t("presets.title") : label(selected)}</h2>
+    {#if selected !== "movimiento"}
+      <h2 class="section">{selected === "all" ? t("presets.title") : label(selected)}</h2>
+    {/if}
     {#each groups as g (g.c)}
       {#if selected === "all"}<h3>{label(g.c)}</h3>{/if}
       <div class="grid">
@@ -210,9 +218,14 @@
           </article>
         {/each}
       </div>
-    {:else}
-      <p class="empty-state">{t("presets.empty")}</p>
     {/each}
+    {#if groups.length === 0 && selected !== "movimiento"}
+      <p class="empty-state">{t("presets.empty")}</p>
+    {/if}
+
+    {#if selected === "all" || selected === "movimiento"}
+      <MotionPanel ready={status.connected && status.open && status.anchored} {run} />
+    {/if}
 
     <footer>{t("footer.privacy")}</footer>
   </main>
@@ -355,17 +368,7 @@
   .msg.ok {
     border-color: var(--lavender);
   }
-  .card {
-    background: var(--surface);
-    border-radius: var(--radius);
-    padding: 18px;
-    border: 1px solid rgba(184, 169, 255, 0.08);
-    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
-    transition:
-      border-color 200ms var(--ease),
-      transform 200ms var(--ease);
-  }
-  .card + .card {
+  .anchor + .anchor {
     margin-top: 12px;
   }
   .card.preset {
@@ -390,65 +393,6 @@
     margin: 0;
     color: var(--text-2);
     max-width: 56ch;
-  }
-  .grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-    gap: 14px;
-  }
-  h4 {
-    margin: 0 0 6px;
-    font-size: 1rem;
-  }
-  .meta {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 4px 10px;
-    margin: 0 0 14px;
-    color: var(--text-2);
-    font-size: 0.85rem;
-  }
-  .tag {
-    color: var(--lavender);
-  }
-  button {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    cursor: pointer;
-    border: 0;
-    border-radius: 12px;
-    padding: 9px 16px;
-    transition:
-      background 180ms var(--ease),
-      opacity 180ms var(--ease),
-      color 180ms var(--ease),
-      border-color 180ms var(--ease);
-  }
-  button.primary {
-    background: var(--accent);
-    color: #fff;
-    font-weight: 600;
-  }
-  button.primary:hover:not(:disabled) {
-    background: var(--lavender);
-    color: var(--bg);
-  }
-  button.ghost {
-    background: transparent;
-    color: var(--text-2);
-    border: 1px solid rgba(184, 169, 255, 0.2);
-  }
-  button.ghost:hover {
-    color: var(--text);
-  }
-  button:disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
-  }
-  button:focus-visible {
-    outline: 2px solid var(--lavender);
-    outline-offset: 2px;
   }
   footer {
     margin-top: 40px;
