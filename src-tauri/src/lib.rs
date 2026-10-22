@@ -22,7 +22,9 @@ pub fn run() {
             commands::motion_control,
             commands::motion_status,
             commands::stop_motion,
-            commands::panic_stop
+            commands::panic_stop,
+            commands::start_turnaround,
+            commands::turnaround_status
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
