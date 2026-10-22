@@ -36,9 +36,13 @@ Si algo contradice el prompt maestro (`CLAUDE.md`), gana lo medido aquí.
 - [ ] Falta: confirmar que el eco coincide valor a valor con lo enviado y el sentido del signo de `rx`.
 
 ### 3. Pose relativa al jugador (Anchor)
-- [ ] Anchor World: caminar/girar el avatar con la cámara quieta → ¿cambia la Pose reportada?
-- [ ] Anchor Local/Attached: lo mismo. ¿La Pose es relativa al jugador?
-- Conclusión (Modo A viable / usar Modo B): 
+- [x] Intento 1 (60 s, cámara quieta): 0 mensajes Pose; solo `LookAtMe false` (el toggle sí hace eco). El usuario no había activado el anchor.
+- [x] Intento 2 (60 s, 2902 Pose; el usuario dice que activó el anchor y caminó en línea recta/giró): la Pose reportada **sí cambia** al moverse el jugador.
+  - `x` recorre −6.7…+2.6 m yendo y viniendo; `z`≈0.4–1.3 casi constante; `y` ≈1.62–1.66.
+  - `ry` alterna ≈270° y ≈89° en cada vuelta de 180° (la cámara gira con el avatar).
+  - Es decir: la cámara sigue al jugador y su Pose sale **en espacio de mundo**, no relativa al jugador.
+- Conclusión provisional: **Modo A no viable** (la Pose no es relativa aunque el anchor siga al jugador) → **Modo B** (Calibrar ancla). Pendiente confirmar: (a) que el anchor estaba realmente en Local/Attached, (b) si en World la Pose se queda fija.
+- Idea para Modo B: con anchor attached la cámara es rígida respecto al jugador; la Pose de la cámara en el momento de calibrar da el origen (ojos + yaw), y los presets se resuelven en mundo con esa referencia. Re-calibrar tras teletransportes.
 
 ### 4. LookAtMe X/Y
 - [ ] `send /usercamera/LookAtMe true`, luego `LookAtMeXOffset 25` y `LookAtMeYOffset 25`, captura. ¿Unidades (% frame / grados)? ¿X/Y cruzados?
