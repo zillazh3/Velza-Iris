@@ -2,3 +2,9 @@ target/
 node_modules/
 tools/probe/logs/
 *.log
+/build
+/.svelte-kit
+src-tauri/gen/
+VelzaIris-data/
+.env
+.env.*
