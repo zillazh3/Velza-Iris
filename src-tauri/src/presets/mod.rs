@@ -208,7 +208,7 @@ mod tests {
     fn commands_for_portrait_and_modifier() {
         let anchor = Anchor { eye: [0.0, 1.6, 0.0], yaw: 0.0 };
         let c = seed("Retrato ¾").commands(Some(&anchor), 0.0).unwrap();
-        assert!(c.contains(&Cmd::Set("Zoom", Value::F(25.0))));
+        assert!(c.contains(&Cmd::Set("Zoom", Value::F(54.0))));
         assert!(c.iter().any(|c| matches!(c, Cmd::Pose(_))));
         assert!(seed("Retrato ¾").commands(None, 0.0).is_err());
         // el modificador no mueve la cámara y suma a la exposición actual

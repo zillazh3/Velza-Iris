@@ -282,7 +282,7 @@ pub fn start_turnaround(four_views: bool, app: AppHandle, st: State<App>) -> Res
             ("GreenScreen", Value::B(true)),
             ("SmoothMovement", Value::B(false)), // con saltos entre paradas, el suavizado cruzaría por el avatar
             ("LookAtMe", Value::B(true)),
-            ("Zoom", Value::F(30.0)),
+            ("Zoom", Value::F(45.0)), // mm (≈30° de FOV vertical)
             ("FocalDistance", Value::F(turnaround::DISTANCE)),
             ("Aperture", Value::F(11.0)),
         ];

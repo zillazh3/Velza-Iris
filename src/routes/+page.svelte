@@ -16,7 +16,7 @@
     Plug,
     UserRound,
   } from "@lucide/svelte";
-  import { api, approxMm, type Preset, type Status } from "$lib/api";
+  import { api, type Preset, type Status } from "$lib/api";
   import { i18n, t, type Key } from "$lib/i18n/index.svelte";
   import MotionPanel from "$lib/MotionPanel.svelte";
 
@@ -199,7 +199,7 @@
           <article class="card preset">
             <h4>{p.name}</h4>
             <p class="meta">
-              {#if p.look.zoom != null}<span>{t("presets.mm", { mm: approxMm(p.look.zoom) })}</span>{/if}
+              {#if p.look.zoom != null}<span>{t("presets.mm", { mm: p.look.zoom })}</span>{/if}
               {#if p.look.aperture != null}<span>{t("presets.aperture", { value: p.look.aperture })}</span>{/if}
               {#if p.look.focus}<span>{t(`focus.${p.look.focus}` as Key)}</span>{/if}
               {#if p.modifier}
