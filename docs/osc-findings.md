@@ -63,8 +63,12 @@ Si algo contradice el prompt maestro (`CLAUDE.md`), gana lo medido aquí.
 - Pendiente: confirmar con lo visto en pantalla el sentido (¿X+ mueve el sujeto a izquierda o derecha en el encuadre?).
 
 ### 5. Zoom
-- [ ] `send /usercamera/Zoom 30`, objeto de referencia a distancia conocida. ¿FOV vertical u horizontal? ¿Tabla ≈mm válida?
-- Resultado:
+- [x] `Zoom 30 / 45 / 90` con la cámara quieta y `Capture` (fotos 3840×2160): el ancho de un mismo objeto (la cama circular) mide ≈270 / 410 / 825 px (a 1280 px de ancho).
+  - Cocientes: 45/30 = ×1.52 y 90/45 = ×2.01, iguales a los cocientes de las focales (×1.5 y ×2.0).
+- **Conclusión: el `Zoom` de VRChat se comporta como una focal (mm), no como un ángulo.** A mayor valor, más cerca (teleobjetivo); el tamaño en cuadro es proporcional al Zoom. Explica el rango 20–300 y el default 45. La doc oficial lo llama "FOV" y está equivocada en esta build.
+- Convención usada por la app: `mm = 12 / tan(FOV/2)` (la tabla del prompt, sensor de 24 mm de alto) para traducir encuadres pensados en FOV. Si el sensor real fuera otro, la focal sigue siendo el valor de Zoom; solo cambiaría el ángulo equivalente.
+- Vertical u horizontal ya no importa para el dolly zoom: `zoom = k·distancia` mantiene el tamaño del sujeto con cualquier sensor.
+- Nota: las 3 fotos de la prueba quedaron en `OneDrive\Imágenes\VRChat6-10\` (2026-10-22 12-04-38/43/49).
 
 ### 6. Frecuencia de Pose
 Con la cámara abierta: `probe rate 30 10`, `rate 60 10`, `rate 90 10`; repetir con `SmoothMovement` on y off.
@@ -128,7 +132,7 @@ Sin probar aún: PhotoRate, Duration, Hue/Saturation/Lightness.
 ## Ajustes al plan
 - Modo A de ancla descartado → Modo B (calibrar). Ver sección 3.
 - Frecuencia de envío de Pose: 60 Hz (eco tope ≈ 61–65 Hz).
-- Zoom: rango real 20–300 (no 150). Actualizar clamp y tabla de la sección 1 del prompt al cerrar M0.
+- Zoom: rango real 20–300 y es una **focal en mm** (no FOV). Semillas y movimientos convertidos a mm (Ambiente amplio 70° → 17 mm, recortado al mínimo 20).
 - Rangos que no vienen en OSCQuery (todos `null`) → hardcodeados desde la tabla.
 
 ## Prueba en vivo de M1 (app Tauri contra VRChat)

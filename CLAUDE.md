@@ -32,7 +32,7 @@ Todos read/write. Envío a `127.0.0.1:9000`, escucha en `9001` — **preferir OS
 
 | Endpoint | Default | Min | Max |
 |---|---|---|---|
-| Zoom (FOV °) | 45 | 20 | 300 (medido en M0; el prompt original decía 150) |
+| Zoom (focal, mm) | 45 | 20 | 300 (medido en M0: es una focal, no un FOV; el prompt original decía FOV 20–150) |
 | Exposure | 0 | -10 | 4 |
 | FocalDistance (m) | 1.5 | 0 | 10 |
 | Aperture (f/) | 15 | 1.4 | 32 |
@@ -77,7 +77,7 @@ Antes de escribir la app, crea `tools/probe` (CLI pequeño) que:
 - **Eco:** sliders (Zoom, Exposure, Aperture, FocalDistance, FlySpeed, TurnSpeed, LookAtMeX/Y, SmoothingStrength), toggles (LookAtMe, SmoothMovement, AutoLevelPitch) y `Mode` sí lo emiten. Sin probar: PhotoRate, Duration, Hue/Saturation/Lightness.
 - **Rangos:** OSCQuery los reporta todos `null`; los clamps salen de la tabla de arriba (Zoom 20–300).
 - **Cámara:** `Mode` no la abre. Eco `Mode 0` = cerrada, `≠0` = abierta (cuando el cambio lo origina el usuario); los `Mode` que escribe la app con la cámara cerrada también devuelven eco, hay que ignorarlos.
-- **Pendiente (decidido diferir a M2):** Zoom vertical u horizontal; mientras tanto "≈ mm" va marcado como aproximado.
+- **Zoom = focal en mm** (medido: el tamaño en cuadro es proporcional al valor; 30→45→90 da ×1.5 y ×2.0). A mayor valor, más cerca. Los FOV del prompt se tradujeron con `mm = 12 / tan(FOV/2)` (ej. 25° → 54 mm). Dolly zoom: `zoom = k·distancia`.
 
 ---
 

@@ -45,6 +45,3 @@ export const api = {
   startTurnaround: (fourViews: boolean) => invoke<void>("start_turnaround", { fourViews }),
   turnaroundStatus: () => invoke<TurnaroundProgress | null>("turnaround_status"),
 };
-
-/** Focal equivalente full-frame si Zoom es FOV vertical (aproximado hasta medirlo, ver docs/osc-findings.md). */
-export const approxMm = (fov: number) => Math.round(12 / Math.tan((fov * Math.PI) / 360));

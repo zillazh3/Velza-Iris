@@ -29,8 +29,12 @@ pub enum Zoom {
     #[default]
     Keep,
     Range(f32, f32),
-    /// Mantiene el tamaño del sujeto: `FOV = 2·atan(H / (2·d))`, con H la altura visible en el plano del sujeto.
-    Dolly { height: f32 },
+    /// Dolly zoom: el Zoom de VRChat es una focal (mm) y el tamaño del sujeto en cuadro ∝ focal / distancia,
+    /// así que `zoom = perMeter · distancia` lo mantiene constante con cualquier sensor.
+    Dolly {
+        #[serde(rename = "perMeter")]
+        per_meter: f32,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -102,7 +106,7 @@ impl Motion {
         let zoom = match self.zoom {
             Zoom::Keep => None,
             Zoom::Range(z0, z1) => Some(lerp(z0, z1, p)),
-            Zoom::Dolly { height } => Some(2.0 * (height / (2.0 * frame.distance)).atan().to_degrees()),
+            Zoom::Dolly { per_meter } => Some(per_meter * frame.distance),
         };
         Sample { frame, zoom }
     }
@@ -223,16 +227,16 @@ mod tests {
     }
 
     #[test]
-    fn dolly_zoom_keeps_visible_height() {
+    fn dolly_zoom_keeps_subject_size() {
         let mut m = motion(Loop::Once, Easing::Sine);
-        m.zoom = Zoom::Dolly { height: 2.2 };
+        m.zoom = Zoom::Dolly { per_meter: 13.4 };
         for t in [0.0, 2.5, 5.0, 7.5, 10.0] {
             let s = m.sample(t);
-            let visible = 2.0 * s.frame.distance * (s.zoom.unwrap().to_radians() / 2.0).tan();
-            assert!(near(visible, 2.2), "t={t} visible={visible}");
+            // tamaño en cuadro ∝ focal / distancia: debe ser constante
+            assert!(near(s.zoom.unwrap() / s.frame.distance, 13.4), "t={t}");
         }
-        // al alejarse el FOV se cierra
-        assert!(m.sample(10.0).zoom.unwrap() < m.sample(0.0).zoom.unwrap());
+        // al alejarse la focal sube (más teleobjetivo)
+        assert!(m.sample(10.0).zoom.unwrap() > m.sample(0.0).zoom.unwrap());
     }
 
     #[test]

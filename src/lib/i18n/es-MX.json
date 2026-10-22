@@ -26,7 +26,7 @@
   "presets.apply": "Aplicar",
   "presets.needAnchor": "Calibra el ancla primero.",
   "presets.modifier": "Modificador",
-  "presets.mm": "≈ {mm} mm",
+  "presets.mm": "{mm} mm",
   "presets.aperture": "f/{value}",
   "presets.ev": "{value} EV",
   "cat.retrato": "Retrato",
