@@ -13,6 +13,7 @@ pub fn run() {
             commands::connect,
             commands::status,
             commands::calibrate,
+            commands::reset_defaults,
             commands::list_presets,
             commands::apply_preset
         ])

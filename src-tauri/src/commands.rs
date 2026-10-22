@@ -109,6 +109,14 @@ pub fn calibrate(st: State<App>) -> Result<(), String> {
     Ok(())
 }
 
+/// Devuelve las opciones de la cámara a los valores por defecto de VRChat y olvida el último preset.
+#[tauri::command]
+pub fn reset_defaults(st: State<App>) -> Result<(), String> {
+    st.camera.lock().unwrap().as_ref().ok_or("sin conexión con VRChat")?.reset()?;
+    *st.last.lock().unwrap() = None;
+    Ok(())
+}
+
 #[tauri::command]
 pub fn list_presets(st: State<App>) -> Library {
     st.library()
