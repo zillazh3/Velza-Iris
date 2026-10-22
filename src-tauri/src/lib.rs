@@ -16,7 +16,13 @@ pub fn run() {
             commands::calibrate,
             commands::reset_defaults,
             commands::list_presets,
-            commands::apply_preset
+            commands::apply_preset,
+            commands::list_motions,
+            commands::play_motion,
+            commands::motion_control,
+            commands::motion_status,
+            commands::stop_motion,
+            commands::panic_stop
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
