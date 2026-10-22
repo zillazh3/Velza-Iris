@@ -63,6 +63,11 @@ pub fn kind(name: &str) -> Option<Kind> {
     ENDPOINTS.iter().find(|(n, _)| *n == name).map(|(_, k)| *k)
 }
 
+/// ¿`v` cabe en el rango del slider `name`? (los presets importados se rechazan, no se recortan)
+pub fn in_range(name: &str, v: f32) -> bool {
+    matches!(kind(name), Some(Float(lo, hi)) if v.is_finite() && (lo..=hi).contains(&v))
+}
+
 /// Valida `value` contra el tipo del endpoint, recorta flotantes/enteros a su rango y devuelve (dirección OSC, args).
 pub fn encode(name: &str, value: Value) -> Result<(String, Vec<OscType>), String> {
     let arg = match (kind(name).ok_or(format!("endpoint desconocido: {name}"))?, value) {

@@ -10,7 +10,7 @@ pub struct Anchor {
 }
 
 /// Encuadre relativo al ancla. La cámara siempre mira a los ojos del jugador; `pitch`/`roll` se suman.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Frame {
     /// Distancia horizontal a los ojos (m).
     pub distance: f32,
