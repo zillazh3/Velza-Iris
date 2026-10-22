@@ -32,7 +32,7 @@ Todos read/write. Envío a `127.0.0.1:9000`, escucha en `9001` — **preferir OS
 
 | Endpoint | Default | Min | Max |
 |---|---|---|---|
-| Zoom (FOV °) | 45 | 20 | 150 |
+| Zoom (FOV °) | 45 | 20 | 300 (medido en M0; el prompt original decía 150) |
 | Exposure | 0 | -10 | 4 |
 | FocalDistance (m) | 1.5 | 0 | 10 |
 | Aperture (f/) | 15 | 1.4 | 32 |
@@ -68,6 +68,16 @@ Antes de escribir la app, crea `tools/probe` (CLI pequeño) que:
    - Frecuencia máxima segura de envío de `Pose` (probar 30/60/90 Hz) y su interacción con `SmoothMovement`.
    - Qué notificaciones de sliders sí llegan en la build actual.
 4. Guarda los hallazgos en `docs/osc-findings.md` y **ajusta este plan** según lo que encuentres. Si algo de este prompt contradice la sonda, gana la sonda.
+
+### Resultado de M0 (detalle en `docs/osc-findings.md`)
+- **Pose** = 6 floats `x y z` (m, mundo) + `rx ry rz` (Euler °, normalizados a [0,360)); `y` arriba, `rx` pitch, `ry` yaw, `rz` roll. Escribible. Posición sin clamp. **Pitch limitado a ±90°** (más se reinterpreta). Tolerancia de comparación ≥1e-3.
+- **Anchor:** la Pose es de **mundo** aunque el anchor siga al jugador → **Modo A descartado, usar Modo B** (Calibrar ancla). Con anchor World la cámara no se mueve.
+- **LookAtMe X/Y offsets:** grados (±25°), X = yaw, Y = pitch, sumados a la mirada hacia el jugador.
+- **Frecuencia:** VRChat emite eco de Pose a ~61–65 Hz como tope → enviar a **60 Hz**. VRChat solo emite Pose cuando cambia.
+- **Eco:** sliders (Zoom, Exposure, Aperture, FocalDistance, FlySpeed, TurnSpeed, LookAtMeX/Y, SmoothingStrength), toggles (LookAtMe, SmoothMovement, AutoLevelPitch) y `Mode` sí lo emiten. Sin probar: PhotoRate, Duration, Hue/Saturation/Lightness.
+- **Rangos:** OSCQuery los reporta todos `null`; los clamps salen de la tabla de arriba (Zoom 20–300).
+- **Cámara:** `Mode` no la abre. Eco `Mode 0` = cerrada, `≠0` = abierta (cuando el cambio lo origina el usuario); los `Mode` que escribe la app con la cámara cerrada también devuelven eco, hay que ignorarlos.
+- **Pendiente (decidido diferir a M2):** Zoom vertical u horizontal; mientras tanto "≈ mm" va marcado como aproximado.
 
 ---
 
