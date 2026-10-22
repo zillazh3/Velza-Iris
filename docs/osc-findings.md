@@ -130,3 +130,9 @@ Sin probar aún: PhotoRate, Duration, Hue/Saturation/Lightness.
 - Frecuencia de envío de Pose: 60 Hz (eco tope ≈ 61–65 Hz).
 - Zoom: rango real 20–300 (no 150). Actualizar clamp y tabla de la sección 1 del prompt al cerrar M0.
 - Rangos que no vienen en OSCQuery (todos `null`) → hardcodeados desde la tabla.
+
+## Prueba en vivo de M1 (app Tauri contra VRChat)
+- Conexión OSCQuery, detección de cámara abierta, Calibrar y aplicar presets funcionan.
+- Ancla de la prueba: ojos `(-0.87, 1.65, 1.93)`, yaw 117.6°. Retrato ¾ salió a 1.30 m de ese punto, mirando de vuelta (yaw 332.6° = 152.6° + 180°); el usuario confirma que "se ve bien".
+- Bug propio encontrado y corregido: un log de depuración tomaba el mismo `Mutex` dos veces en una expresión y colgaba la ventana al pulsar Aplicar (std `Mutex` no es reentrante). No llegó a ningún commit.
+- Sin verificar visualmente aún: signo del yaw (+ = derecha del jugador), roll del Dutch angle con `LookAtMe` activo y reaplicado de preset al reabrir la cámara.
