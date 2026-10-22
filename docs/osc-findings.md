@@ -77,8 +77,18 @@ Hz seguro elegido (provisional): **60 Hz** (≈ el tope de eco); falta juzgar su
 
 ### 7. Eco de sliders
 Mover cada slider desde el menú de la cámara y marcar si llega mensaje en `listen`.
-En la ventana de 60 s (sección 2) **solo llegó `/usercamera/Pose`**; ningún slider emitió mensaje. No concluyente: no sé si el usuario movió sliders en esa ventana. Repetir con sliders explícitos.
-- [ ] Zoom  [ ] Exposure  [ ] FocalDistance  [ ] Aperture  [ ] LookAtMeXOffset  [ ] LookAtMeYOffset
+Ventana de 90 s moviendo sliders desde Quick Menu → Camera (2609 mensajes). **Sí hacen eco** (mensajes por endpoint, rango observado):
+| Endpoint | Msgs | Mín | Máx | Nota |
+|---|---|---|---|---|
+| Zoom | 490 | 20 | **300** | contradice el prompt (150); gana la sonda |
+| Exposure | 298 | −10 | 4 | coincide |
+| Aperture | 425 | 1.4 | 32 | coincide |
+| FocalDistance | 290 | 0 | 10 | coincide |
+| FlySpeed | 612 | 0.1 | 15 | coincide |
+| TurnSpeed | 476 | 0.1 | 5 | coincide |
+Toggles con eco: LookAtMe, SmoothMovement, AutoLevelPitch. Los sliders emiten ~60 Hz mientras se arrastran y al soltar vuelven al valor que fije el usuario.
+No probados en esta ventana (no se movieron): LookAtMeX/YOffset, SmoothingStrength, PhotoRate, Duration, Hue/Saturation/Lightness.
+- [x] Zoom  [x] Exposure  [ ] FocalDistance  [ ] Aperture  [ ] LookAtMeXOffset  [ ] LookAtMeYOffset
 - [ ] FlySpeed  [ ] TurnSpeed  [ ] SmoothingStrength  [ ] PhotoRate  [ ] Duration  [ ] Hue/Saturation/Lightness
 
 ### 8. Cámara cerrada / abierta
@@ -91,4 +101,7 @@ En la ventana de 60 s (sección 2) **solo llegó `/usercamera/Pose`**; ningún s
 - Resultado:
 
 ## Ajustes al plan
-(Se llena tras los experimentos.)
+- Modo A de ancla descartado → Modo B (calibrar). Ver sección 3.
+- Frecuencia de envío de Pose: 60 Hz (eco tope ≈ 61–65 Hz).
+- Zoom: rango real 20–300 (no 150). Actualizar clamp y tabla de la sección 1 del prompt al cerrar M0.
+- Rangos que no vienen en OSCQuery (todos `null`) → hardcodeados desde la tabla.
