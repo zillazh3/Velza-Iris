@@ -68,7 +68,7 @@ Si algo contradice el prompt maestro (`CLAUDE.md`), gana lo medido aquí.
 - **Conclusión: el `Zoom` de VRChat se comporta como una focal (mm), no como un ángulo.** A mayor valor, más cerca (teleobjetivo); el tamaño en cuadro es proporcional al Zoom. Explica el rango 20–300 y el default 45. La doc oficial lo llama "FOV" y está equivocada en esta build.
 - Convención usada por la app: `mm = 12 / tan(FOV/2)` (la tabla del prompt, sensor de 24 mm de alto) para traducir encuadres pensados en FOV. Si el sensor real fuera otro, la focal sigue siendo el valor de Zoom; solo cambiaría el ángulo equivalente.
 - Vertical u horizontal ya no importa para el dolly zoom: `zoom = k·distancia` mantiene el tamaño del sujeto con cualquier sensor.
-- Nota: las 3 fotos de la prueba quedaron en `OneDrive\Imágenes\VRChat6-10\` (2026-10-22 12-04-38/43/49).
+- Nota: las 3 fotos de la prueba quedaron en `OneDrive/Imágenes/VRChat/2026-10/` (2026-10-22 12-04-38/43/49).
 
 ### 6. Frecuencia de Pose
 Con la cámara abierta: `probe rate 30 10`, `rate 60 10`, `rate 90 10`; repetir con `SmoothMovement` on y off.
