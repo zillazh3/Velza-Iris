@@ -1,8 +1,9 @@
 //! Comandos Tauri: puente entre la UI y camera/anchor/presets.
 use crate::anchor::Anchor;
-use crate::camera::{Camera, Change};
+use crate::camera::{Camera, Change, DEFAULTS};
 use crate::motion::runner::{Cmd, Output, PlayState, Runner};
 use crate::motion::sample::{motions, Motion};
+use crate::motion::turnaround::{self, Action, Progress, Timing, Turnaround};
 use crate::osc::protocol::Value;
 use crate::osc::query;
 use crate::presets::{self, Preset};
@@ -20,6 +21,7 @@ pub struct App {
     last: Mutex<Option<Preset>>,
     /// Movimiento en curso; soltarlo (`None`) detiene el hilo.
     runner: Mutex<Option<Runner>>,
+    turnaround: Mutex<Option<Turnaround>>,
     data: Result<PathBuf, String>,
 }
 
@@ -30,8 +32,15 @@ impl App {
             anchor: Mutex::default(),
             last: Mutex::default(),
             runner: Mutex::default(),
+            turnaround: Mutex::default(),
             data: storage::data_dir(false),
         }
+    }
+
+    /// Detiene movimiento y turnaround (este último restaura sus ajustes). No llamar con el lock de `camera` tomado.
+    fn halt(&self) {
+        *self.runner.lock().unwrap() = None;
+        *self.turnaround.lock().unwrap() = None;
     }
 
     fn library(&self) -> Library {
@@ -123,7 +132,7 @@ pub fn calibrate(st: State<App>) -> Result<(), String> {
 /// Devuelve las opciones de la cámara a los valores por defecto de VRChat y olvida el último preset.
 #[tauri::command]
 pub fn reset_defaults(st: State<App>) -> Result<(), String> {
-    *st.runner.lock().unwrap() = None;
+    st.halt();
     st.camera.lock().unwrap().as_ref().ok_or("sin conexión con VRChat")?.reset()?;
     *st.last.lock().unwrap() = None;
     Ok(())
@@ -137,7 +146,7 @@ pub fn list_presets(st: State<App>) -> Library {
 #[tauri::command]
 pub fn apply_preset(name: String, st: State<App>) -> Result<(), String> {
     let preset = st.library().presets.into_iter().find(|p| p.name == name).ok_or("el preset no existe")?;
-    *st.runner.lock().unwrap() = None; // un encuadre estático reemplaza al movimiento en curso
+    st.halt(); // un encuadre estático reemplaza al movimiento en curso
     st.apply(&preset)?;
     if !preset.modifier {
         *st.last.lock().unwrap() = Some(preset);
@@ -175,6 +184,7 @@ pub fn list_motions() -> Vec<Motion> {
 #[tauri::command]
 pub fn play_motion(name: String, app: AppHandle, st: State<App>) -> Result<(), String> {
     let motion = motions().into_iter().find(|m| m.name == name).ok_or("el movimiento no existe")?;
+    *st.turnaround.lock().unwrap() = None; // restaura sus ajustes antes de que play_motion fije los suyos
     let anchor = (*st.anchor.lock().unwrap()).ok_or("sin ancla: calibra primero")?;
     {
         let cam = st.camera.lock().unwrap();
@@ -236,13 +246,78 @@ pub fn motion_status(st: State<App>) -> MotionStatus {
 /// Detiene el movimiento y deja la cámara donde está.
 #[tauri::command]
 pub fn stop_motion(st: State<App>) {
-    *st.runner.lock().unwrap() = None;
+    st.halt();
 }
 
 /// Pánico: detiene todo y vuelve al último preset estático (si hubo uno).
 #[tauri::command]
 pub fn panic_stop(st: State<App>) -> Result<(), String> {
-    *st.runner.lock().unwrap() = None;
+    st.halt();
     let last = st.last.lock().unwrap().clone();
     last.map_or(Ok(()), |p| st.apply(&p))
+}
+
+/// Turnaround: 8 paradas cada 45° (o 4 vistas) con captura. Apaga jugadores remotos y entorno, enciende GreenScreen
+/// y al terminar, detenerlo o fallar restaura esos toggles, SmoothMovement y LookAtMe.
+#[tauri::command]
+pub fn start_turnaround(four_views: bool, app: AppHandle, st: State<App>) -> Result<(), String> {
+    st.halt();
+    let anchor = (*st.anchor.lock().unwrap()).ok_or("sin ancla: calibra primero")?;
+    let prev: Vec<(&'static str, Value)> = {
+        let cam = st.camera.lock().unwrap();
+        let cam = cam.as_ref().ok_or("sin conexión con VRChat")?;
+        let prev = {
+            let state = cam.state.lock().unwrap();
+            if !state.open {
+                return Err("cámara cerrada: ábrela en VRChat".into());
+            }
+            ["RemotePlayer", "Environment", "GreenScreen", "SmoothMovement", "LookAtMe"].map(|n| {
+                let default = DEFAULTS.iter().find(|(k, _)| *k == n).map(|(_, v)| *v).unwrap();
+                (n, state.values.get(n).copied().unwrap_or(default))
+            })
+        };
+        let setup = [
+            ("RemotePlayer", Value::B(false)),
+            ("Environment", Value::B(false)),
+            ("GreenScreen", Value::B(true)),
+            ("SmoothMovement", Value::B(false)), // con saltos entre paradas, el suavizado cruzaría por el avatar
+            ("LookAtMe", Value::B(true)),
+            ("Zoom", Value::F(30.0)),
+            ("FocalDistance", Value::F(turnaround::DISTANCE)),
+            ("Aperture", Value::F(11.0)),
+        ];
+        for (n, v) in setup {
+            cam.set(n, v)?;
+        }
+        prev.to_vec()
+    };
+    let (go, done) = (app.clone(), app);
+    let t = Turnaround::start(
+        turnaround::yaws(four_views),
+        Timing::default(),
+        move |action| {
+            let st = go.state::<App>();
+            let cam = st.camera.lock().unwrap();
+            let cam = cam.as_ref().ok_or("sin conexión con VRChat")?;
+            match action {
+                Action::Go(yaw) => cam.pose(&anchor.pose(&turnaround::frame(yaw))),
+                Action::Capture => cam.set("Capture", Value::B(true)),
+            }
+        },
+        // Restaurar es de mejor esfuerzo: si la cámara se cerró, no hay nada que restaurar.
+        move || {
+            if let Some(cam) = done.state::<App>().camera.lock().unwrap().as_ref() {
+                for (n, v) in prev {
+                    let _ = cam.set(n, v);
+                }
+            }
+        },
+    );
+    *st.turnaround.lock().unwrap() = Some(t);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn turnaround_status(st: State<App>) -> Option<Progress> {
+    st.turnaround.lock().unwrap().as_ref().map(|t| t.progress())
 }
