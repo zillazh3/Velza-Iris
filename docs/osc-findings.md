@@ -135,4 +135,5 @@ Sin probar aún: PhotoRate, Duration, Hue/Saturation/Lightness.
 - Conexión OSCQuery, detección de cámara abierta, Calibrar y aplicar presets funcionan.
 - Ancla de la prueba: ojos `(-0.87, 1.65, 1.93)`, yaw 117.6°. Retrato ¾ salió a 1.30 m de ese punto, mirando de vuelta (yaw 332.6° = 152.6° + 180°); el usuario confirma que "se ve bien".
 - Bug propio encontrado y corregido: un log de depuración tomaba el mismo `Mutex` dos veces en una expresión y colgaba la ventana al pulsar Aplicar (std `Mutex` no es reentrante). No llegó a ningún commit.
-- Sin verificar visualmente aún: signo del yaw (+ = derecha del jugador), roll del Dutch angle con `LookAtMe` activo y reaplicado de preset al reabrir la cámara.
+- Confirmado visualmente por el usuario: yaw positivo = **derecha del jugador** (Retrato ¾ con yaw 35° queda a la derecha del avatar, casi de frente); el roll del Dutch angle (12°) **sí se aplica con `LookAtMe` activo**.
+- Sin verificar aún: reaplicado de preset al reabrir la cámara.
