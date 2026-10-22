@@ -19,6 +19,8 @@
   "reset.button": "Reset",
   "reset.done": "Camera reset.",
   "nav.all": "All",
+  "nav.collapse": "Collapse menu",
+  "nav.expand": "Expand menu",
   "presets.title": "Framings",
   "presets.empty": "No framings in this category yet.",
   "presets.apply": "Apply",

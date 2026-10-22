@@ -19,6 +19,8 @@
   "reset.button": "Restablecer",
   "reset.done": "Cámara restablecida.",
   "nav.all": "Todos",
+  "nav.collapse": "Reducir menú",
+  "nav.expand": "Ampliar menú",
   "presets.title": "Encuadres",
   "presets.empty": "Aún no hay encuadres en esta categoría.",
   "presets.apply": "Aplicar",
