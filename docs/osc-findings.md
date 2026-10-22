@@ -33,7 +33,14 @@ Si algo contradice el prompt maestro (`CLAUDE.md`), gana lo medido aquí.
   - `rx` = pitch (≈ 0–11° mirando al frente; envuelve a 0–360, valores >180 = mirar abajo/arriba según signo, por confirmar), `ry` = yaw 0–360, `rz` = roll (siempre 0 con AutoLevelRoll off y sin tocarlo).
   - Posiciones en el log son coordenadas de mundo (z 0.2–5.3, x −2.9–2.3). Pendiente confirmar espacio con anchor (sección 3).
 - [x] Escritura: `send`/`rate` mueve la cámara y VRChat responde con eco de Pose → **Pose es escribible** pese al ACCESS=1 del árbol.
-- [ ] Falta: confirmar que el eco coincide valor a valor con lo enviado y el sentido del signo de `rx`.
+- [x] Eco valor a valor (7 poses de prueba con `LookAtMe` off):
+  - Posición: eco idéntico, sin clamp (aceptó `100 50 -30`).
+  - Rotación Euler en grados, **normalizada a [0, 360)**: `-10→349.99997`, `400→40`, `-90→270`.
+  - Roll se acepta (`rz=15` → `15.000001`).
+  - **Pitch > 90° se reinterpreta** como equivalente de Euler: `95 90 0` → `85.00009 270 180`. La app debe limitar el pitch a ±90° (rx en [0,90] ∪ [270,360)) y no enviar más.
+  - Error de float ~1e-5; tolerancia de comparación ≥1e-3.
+  - Latencia del eco ≈ 90 ms tras el envío (en pruebas separadas 2 s).
+- El sentido físico de `rx` (+ = mirar abajo, convención Unity) sigue sin confirmar visualmente.
 
 ### 3. Pose relativa al jugador (Anchor)
 - [x] Intento 1 (60 s, cámara quieta): 0 mensajes Pose; solo `LookAtMe false` (el toggle sí hace eco). El usuario no había activado el anchor.
