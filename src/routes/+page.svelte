@@ -94,6 +94,16 @@
     </button>
   </section>
 
+  <section class="card anchor">
+    <div>
+      <h2>{t("reset.title")}</h2>
+      <p>{t("reset.help")}</p>
+    </div>
+    <button class="ghost" disabled={!status.connected} onclick={() => run(() => api.resetDefaults(), t("reset.done"))}>
+      {t("reset.button")}
+    </button>
+  </section>
+
   <h2 class="section">{t("presets.title")}</h2>
   {#each groups as g (g.c)}
     <h3>{t(`cat.${g.c}` as Key)}</h3>

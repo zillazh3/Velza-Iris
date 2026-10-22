@@ -22,6 +22,7 @@ export const api = {
   connect: () => invoke<void>("connect"),
   status: () => invoke<Status>("status"),
   calibrate: () => invoke<void>("calibrate"),
+  resetDefaults: () => invoke<void>("reset_defaults"),
   listPresets: () => invoke<{ presets: Preset[]; warnings: string[] }>("list_presets"),
   applyPreset: (name: string) => invoke<void>("apply_preset", { name }),
 };
