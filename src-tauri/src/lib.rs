@@ -1,6 +1,7 @@
 pub mod anchor;
 pub mod camera;
 mod commands;
+pub mod motion;
 pub mod osc;
 pub mod presets;
 pub mod storage;
