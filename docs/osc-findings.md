@@ -87,7 +87,14 @@ Ventana de 90 s moviendo sliders desde Quick Menu → Camera (2609 mensajes). **
 | FlySpeed | 612 | 0.1 | 15 | coincide |
 | TurnSpeed | 476 | 0.1 | 5 | coincide |
 Toggles con eco: LookAtMe, SmoothMovement, AutoLevelPitch. Los sliders emiten ~60 Hz mientras se arrastran y al soltar vuelven al valor que fije el usuario.
-No probados en esta ventana (no se movieron): LookAtMeX/YOffset, SmoothingStrength, PhotoRate, Duration, Hue/Saturation/Lightness.
+Segunda ventana (120 s, 975 msgs), también con eco y rango igual a la tabla:
+| Endpoint | Msgs | Mín | Máx |
+|---|---|---|---|
+| LookAtMeXOffset | 104 | −25 | 25 |
+| LookAtMeYOffset | 42 | −25 | 25 |
+| SmoothingStrength | 420 | 0.1 | 10 |
+Los X/Y solo mostrados como eco: si están cruzados respecto al menú no se puede ver aquí; hay que enviarlos y mirar (sección 4).
+Sin probar aún: PhotoRate, Duration, Hue/Saturation/Lightness.
 - [x] Zoom  [x] Exposure  [ ] FocalDistance  [ ] Aperture  [ ] LookAtMeXOffset  [ ] LookAtMeYOffset
 - [ ] FlySpeed  [ ] TurnSpeed  [ ] SmoothingStrength  [ ] PhotoRate  [ ] Duration  [ ] Hue/Saturation/Lightness
 
