@@ -1,0 +1,317 @@
+{
+  "ACCESS": 0,
+  "CONTENTS": {
+    "Aperture": {
+      "ACCESS": 3,
+      "FULL_PATH": "/usercamera/Aperture",
+      "TYPE": "f",
+      "VALUE": [
+        15.0
+      ]
+    },
+    "AudioFromCamera": {
+      "ACCESS": 3,
+      "FULL_PATH": "/usercamera/AudioFromCamera",
+      "TYPE": "T",
+      "VALUE": [
+        false
+      ]
+    },
+    "AutoLevelPitch": {
+      "ACCESS": 3,
+      "FULL_PATH": "/usercamera/AutoLevelPitch",
+      "TYPE": "T",
+      "VALUE": [
+        false
+      ]
+    },
+    "AutoLevelRoll": {
+      "ACCESS": 3,
+      "FULL_PATH": "/usercamera/AutoLevelRoll",
+      "TYPE": "T",
+      "VALUE": [
+        false
+      ]
+    },
+    "Capture": {
+      "ACCESS": 2,
+      "FULL_PATH": "/usercamera/Capture",
+      "TYPE": "T",
+      "VALUE": [
+        false
+      ]
+    },
+    "CaptureDelayed": {
+      "ACCESS": 2,
+      "FULL_PATH": "/usercamera/CaptureDelayed",
+      "TYPE": "T",
+      "VALUE": [
+        false
+      ]
+    },
+    "Close": {
+      "ACCESS": 2,
+      "FULL_PATH": "/usercamera/Close",
+      "TYPE": "T",
+      "VALUE": [
+        false
+      ]
+    },
+    "DollyPathsStayVisible": {
+      "ACCESS": 3,
+      "FULL_PATH": "/usercamera/DollyPathsStayVisible",
+      "TYPE": "T",
+      "VALUE": [
+        false
+      ]
+    },
+    "Duration": {
+      "ACCESS": 3,
+      "FULL_PATH": "/usercamera/Duration",
+      "TYPE": "f",
+      "VALUE": [
+        1.0
+      ]
+    },
+    "Environment": {
+      "ACCESS": 3,
+      "FULL_PATH": "/usercamera/Environment",
+      "TYPE": "T",
+      "VALUE": [
+        true
+      ]
+    },
+    "Exposure": {
+      "ACCESS": 3,
+      "FULL_PATH": "/usercamera/Exposure",
+      "TYPE": "f",
+      "VALUE": [
+        0.0
+      ]
+    },
+    "FlingToClose": {
+      "ACCESS": 3,
+      "FULL_PATH": "/usercamera/FlingToClose",
+      "TYPE": "T",
+      "VALUE": [
+        true
+      ]
+    },
+    "FlySpeed": {
+      "ACCESS": 3,
+      "FULL_PATH": "/usercamera/FlySpeed",
+      "TYPE": "f",
+      "VALUE": [
+        0.2
+      ]
+    },
+    "Flying": {
+      "ACCESS": 3,
+      "FULL_PATH": "/usercamera/Flying",
+      "TYPE": "T",
+      "VALUE": [
+        false
+      ]
+    },
+    "FocalDistance": {
+      "ACCESS": 3,
+      "FULL_PATH": "/usercamera/FocalDistance",
+      "TYPE": "f",
+      "VALUE": [
+        2.0
+      ]
+    },
+    "GreenScreen": {
+      "ACCESS": 3,
+      "FULL_PATH": "/usercamera/GreenScreen",
+      "TYPE": "T",
+      "VALUE": [
+        false
+      ]
+    },
+    "Hue": {
+      "ACCESS": 3,
+      "FULL_PATH": "/usercamera/Hue",
+      "TYPE": "f",
+      "VALUE": [
+        120.0
+      ]
+    },
+    "Lightness": {
+      "ACCESS": 3,
+      "FULL_PATH": "/usercamera/Lightness",
+      "TYPE": "f",
+      "VALUE": [
+        50.0
+      ]
+    },
+    "LocalPlayer": {
+      "ACCESS": 3,
+      "FULL_PATH": "/usercamera/LocalPlayer",
+      "TYPE": "T",
+      "VALUE": [
+        true
+      ]
+    },
+    "Lock": {
+      "ACCESS": 3,
+      "FULL_PATH": "/usercamera/Lock",
+      "TYPE": "T",
+      "VALUE": [
+        true
+      ]
+    },
+    "LookAtMe": {
+      "ACCESS": 3,
+      "FULL_PATH": "/usercamera/LookAtMe",
+      "TYPE": "T",
+      "VALUE": [
+        false
+      ]
+    },
+    "LookAtMeXOffset": {
+      "ACCESS": 3,
+      "FULL_PATH": "/usercamera/LookAtMeXOffset",
+      "TYPE": "f",
+      "VALUE": [
+        0.0
+      ]
+    },
+    "LookAtMeYOffset": {
+      "ACCESS": 3,
+      "FULL_PATH": "/usercamera/LookAtMeYOffset",
+      "TYPE": "f",
+      "VALUE": [
+        0.0
+      ]
+    },
+    "Mode": {
+      "ACCESS": 3,
+      "FULL_PATH": "/usercamera/Mode",
+      "TYPE": "i",
+      "VALUE": [
+        1
+      ]
+    },
+    "OrientationIsLandscape": {
+      "ACCESS": 3,
+      "FULL_PATH": "/usercamera/OrientationIsLandscape",
+      "TYPE": "T",
+      "VALUE": [
+        true
+      ]
+    },
+    "PhotoRate": {
+      "ACCESS": 3,
+      "FULL_PATH": "/usercamera/PhotoRate",
+      "TYPE": "f",
+      "VALUE": [
+        1.0
+      ]
+    },
+    "Pose": {
+      "ACCESS": 1,
+      "FULL_PATH": "/usercamera/Pose",
+      "TYPE": "ffffff",
+      "VALUE": [
+        [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      ]
+    },
+    "RemotePlayer": {
+      "ACCESS": 3,
+      "FULL_PATH": "/usercamera/RemotePlayer",
+      "TYPE": "T",
+      "VALUE": [
+        true
+      ]
+    },
+    "RollWhileFlying": {
+      "ACCESS": 3,
+      "FULL_PATH": "/usercamera/RollWhileFlying",
+      "TYPE": "T",
+      "VALUE": [
+        true
+      ]
+    },
+    "Saturation": {
+      "ACCESS": 3,
+      "FULL_PATH": "/usercamera/Saturation",
+      "TYPE": "f",
+      "VALUE": [
+        100.0
+      ]
+    },
+    "ShowFocus": {
+      "ACCESS": 3,
+      "FULL_PATH": "/usercamera/ShowFocus",
+      "TYPE": "T",
+      "VALUE": [
+        false
+      ]
+    },
+    "ShowUIInCamera": {
+      "ACCESS": 3,
+      "FULL_PATH": "/usercamera/ShowUIInCamera",
+      "TYPE": "T",
+      "VALUE": [
+        false
+      ]
+    },
+    "SmoothMovement": {
+      "ACCESS": 3,
+      "FULL_PATH": "/usercamera/SmoothMovement",
+      "TYPE": "T",
+      "VALUE": [
+        false
+      ]
+    },
+    "SmoothingStrength": {
+      "ACCESS": 3,
+      "FULL_PATH": "/usercamera/SmoothingStrength",
+      "TYPE": "f",
+      "VALUE": [
+        5.0
+      ]
+    },
+    "Streaming": {
+      "ACCESS": 3,
+      "FULL_PATH": "/usercamera/Streaming",
+      "TYPE": "T",
+      "VALUE": [
+        false
+      ]
+    },
+    "TriggerTakesPhotos": {
+      "ACCESS": 3,
+      "FULL_PATH": "/usercamera/TriggerTakesPhotos",
+      "TYPE": "T",
+      "VALUE": [
+        false
+      ]
+    },
+    "TurnSpeed": {
+      "ACCESS": 3,
+      "FULL_PATH": "/usercamera/TurnSpeed",
+      "TYPE": "f",
+      "VALUE": [
+        1.0
+      ]
+    },
+    "Zoom": {
+      "ACCESS": 3,
+      "FULL_PATH": "/usercamera/Zoom",
+      "TYPE": "f",
+      "VALUE": [
+        "NaN"
+      ]
+    }
+  },
+  "FULL_PATH": "/usercamera"
+}
