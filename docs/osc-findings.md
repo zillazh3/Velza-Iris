@@ -46,8 +46,14 @@ Si algo contradice el prompt maestro (`CLAUDE.md`), gana lo medido aquí.
 - Idea para Modo B: con anchor attached la cámara es rígida respecto al jugador; la Pose de la cámara en el momento de calibrar da el origen (ojos + yaw), y los presets se resuelven en mundo con esa referencia. Re-calibrar tras teletransportes.
 
 ### 4. LookAtMe X/Y
-- [ ] `send /usercamera/LookAtMe true`, luego `LookAtMeXOffset 25` y `LookAtMeYOffset 25`, captura. ¿Unidades (% frame / grados)? ¿X/Y cruzados?
-- Resultado:
+- [x] Enviado `LookAtMe true` y offsets por pasos de 8 s; el eco de Pose reveló el efecto (posición fija 2.49, 1.55, 1.37):
+  - Base (X=0,Y=0): `rx=358.43` (−1.57°), `ry=272.15`.
+  - X=+25 → `ry=297.15` (**+25°**); X=−25 → `ry=247.15` (**−25°**). `rx` no cambia.
+  - Y=+25 → `rx=23.43` (**+25°**); Y=−25 → `rx=333.43` (**−25°**). `ry` no cambia.
+- **Unidades: grados**, offset sumado a la rotación que apunta al jugador. **X = yaw, Y = pitch**; no están cruzados en esta build (con respecto a Pose).
+- `rx` positivo = mirar hacia abajo (convención Unity) por confirmar con lo que vio el usuario en pantalla.
+- Cada comando produce eco doble del propio slider (2 mensajes en ~5 ms) y un eco de Pose.
+- Pendiente: confirmar con lo visto en pantalla el sentido (¿X+ mueve el sujeto a izquierda o derecha en el encuadre?).
 
 ### 5. Zoom
 - [ ] `send /usercamera/Zoom 30`, objeto de referencia a distancia conocida. ¿FOV vertical u horizontal? ¿Tabla ≈mm válida?
