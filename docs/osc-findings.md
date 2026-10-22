@@ -105,9 +105,10 @@ Sin probar aún: PhotoRate, Duration, Hue/Saturation/Lightness.
 - [ ] FlySpeed  [ ] TurnSpeed  [ ] SmoothingStrength  [ ] PhotoRate  [ ] Duration  [ ] Hue/Saturation/Lightness
 
 ### 8. Cámara cerrada / abierta
-- [ ] Con la cámara cerrada: `send /usercamera/Mode i:1` → ¿se abre?
-- [ ] ¿Qué mensajes llegan al abrir y cerrar (para detectar estado)?
-- Resultado:
+- [x] `Close true` → la cámara se cierra (confirmado por el usuario) y llega eco `Mode [i:0]`.
+- [x] Con la cámara cerrada, `Mode i:1` y luego `Mode i:2`: llegan ecos `Mode [i:1]` / `[i:2]` pero **la cámara no se abre** (confirmado por el usuario).
+- Conclusión: **`Mode` no abre la cámara** (el prompt acertó), y su eco solo refleja el valor escrito, así que **no sirve para detectar si está abierta**. Solo `Mode=0` tras un `Close` es fiable.
+- Detección de apertura: pendiente. Candidatas: aparición de eco de `Pose` al abrirla, o un eco de `Mode` distinto al abrirla desde el menú (probar abriendo/cerrando a mano con `listen`).
 
 ### 9. Modos de enfoque
 - [ ] ¿Aperture solo en Semi Auto/Manual? ¿FocalDistance solo en Manual? ¿Hay endpoint para el modo de enfoque?
