@@ -3,6 +3,8 @@
   import {
     Aperture,
     Camera,
+    ChevronsLeft,
+    ChevronsRight,
     Clapperboard,
     Crosshair,
     Grid3x3,
@@ -23,6 +25,10 @@
   let presets = $state<Preset[]>([]);
   let message = $state<{ text: string; ok: boolean } | null>(null);
   let selected = $state<"all" | Category>("all");
+  // ponytail: el estado del sidebar no se guarda entre sesiones (igual que el idioma).
+  let collapsed = $state(false);
+  let narrow = $state(false);
+  const rail = $derived(collapsed || narrow);
 
   const categories: Category[] = ["retrato", "cuerpo", "ambiente", "movimiento", "video", "ref_sheet"];
   const icons = {
@@ -76,11 +82,19 @@
     });
     tick();
     const id = setInterval(tick, 1000);
-    return () => clearInterval(id);
+    // Ventana angosta: el sidebar queda compacto sin importar la preferencia.
+    const mq = window.matchMedia("(max-width: 820px)");
+    const onChange = () => (narrow = mq.matches);
+    onChange();
+    mq.addEventListener("change", onChange);
+    return () => {
+      clearInterval(id);
+      mq.removeEventListener("change", onChange);
+    };
   });
 </script>
 
-<div class="shell">
+<div class="shell" class:rail>
   <nav class="sidebar" aria-label={t("presets.title")}>
     <h1 class="brand"><Aperture size={22} /> <span class="text">{t("app.title")}</span></h1>
 
@@ -106,6 +120,18 @@
     <button class="item lang" title={t("lang.switch")} onclick={() => i18n.toggle()}>
       <Languages size={18} /> <span class="text">{t("lang.switch")}</span>
     </button>
+
+    {#if !narrow}
+      {@const Chevron = rail ? ChevronsRight : ChevronsLeft}
+      <button
+        class="item"
+        aria-expanded={!rail}
+        title={t(rail ? "nav.expand" : "nav.collapse")}
+        onclick={() => (collapsed = !collapsed)}
+      >
+        <Chevron size={18} /> <span class="text">{t("nav.collapse")}</span>
+      </button>
+    {/if}
   </nav>
 
   <main>
@@ -197,6 +223,10 @@
     display: grid;
     grid-template-columns: 232px 1fr;
     min-height: 100vh;
+    transition: grid-template-columns 200ms var(--ease);
+  }
+  .shell.rail {
+    grid-template-columns: 68px 1fr;
   }
   .sidebar {
     position: sticky;
@@ -427,25 +457,20 @@
     text-align: center;
   }
 
-  /* Ventana angosta: el sidebar queda como rail de iconos. */
-  @media (max-width: 820px) {
-    .shell {
-      grid-template-columns: 68px 1fr;
-    }
-    .sidebar {
-      padding: 22px 8px;
-      align-items: center;
-    }
-    .sidebar .text,
-    .count {
-      display: none;
-    }
-    .item {
-      justify-content: center;
-      padding: 10px;
-    }
-    .brand {
-      margin: 0;
-    }
+  /* Sidebar compacto (rail de iconos): por la flecha o por ventana angosta. */
+  .rail .sidebar {
+    padding: 22px 8px;
+    align-items: center;
+  }
+  .rail .text,
+  .rail .count {
+    display: none;
+  }
+  .rail .item {
+    justify-content: center;
+    padding: 10px;
+  }
+  .rail .brand {
+    margin: 0;
   }
 </style>
