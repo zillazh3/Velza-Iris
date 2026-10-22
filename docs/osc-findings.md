@@ -108,7 +108,11 @@ Sin probar aún: PhotoRate, Duration, Hue/Saturation/Lightness.
 - [x] `Close true` → la cámara se cierra (confirmado por el usuario) y llega eco `Mode [i:0]`.
 - [x] Con la cámara cerrada, `Mode i:1` y luego `Mode i:2`: llegan ecos `Mode [i:1]` / `[i:2]` pero **la cámara no se abre** (confirmado por el usuario).
 - Conclusión: **`Mode` no abre la cámara** (el prompt acertó), y su eco solo refleja el valor escrito, así que **no sirve para detectar si está abierta**. Solo `Mode=0` tras un `Close` es fiable.
-- Detección de apertura: pendiente. Candidatas: aparición de eco de `Pose` al abrirla, o un eco de `Mode` distinto al abrirla desde el menú (probar abriendo/cerrando a mano con `listen`).
+- [x] Ventana de 75 s abriendo/cerrando a mano desde el menú (38 msgs: 34 `Mode`, 4 `Pose`):
+  - **Cerrar desde el menú → `Mode [i:0]`; abrir → `Mode [i:1]` (Photo) o `[i:2]` (Stream)** según el modo elegido. Cada apertura/cierre produce un eco, sin latencia apreciable.
+  - A veces llega un `Pose` ~20 ms después de abrir (4 de ~17 aperturas); no es fiable como detector.
+  - Cambiar de modo (1↔2) con la cámara abierta pasa por `Mode 0` (cierra y reabre).
+- **Detector de apertura/cierre: el eco de `Mode`** (0 = cerrada, ≠0 = abierta) cuando lo origina el usuario. Las escrituras propias de la app mientras está cerrada también devuelven eco sin abrirla, así que la app debe **ignorar el eco de sus propios `Mode`** (p. ej. no escribir `Mode` salvo con cámara abierta) y reaplicar el preset al ver `0→N` iniciado por el usuario.
 
 ### 9. Modos de enfoque
 - [ ] ¿Aperture solo en Semi Auto/Manual? ¿FocalDistance solo en Manual? ¿Hay endpoint para el modo de enfoque?
