@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount, tick } from "svelte";
   import { ChevronDown, Check } from "@lucide/svelte";
+  import { t } from "$lib/i18n/index.svelte";
 
   export interface SelectOption<T = string> {
     value: T;
@@ -29,7 +30,7 @@
   let {
     items = [],
     value = $bindable(),
-    placeholder = "Seleccionar opción...",
+    placeholder,
     size = "md",
     disabled = false,
     name,
@@ -40,6 +41,8 @@
     glowOnActive = true,
     onchange,
   }: Props = $props();
+
+  const resolvedPlaceholder = $derived(placeholder ?? t("select.placeholder"));
 
   let isOpen = $state(false);
   let placement = $state<"bottom" | "top">("bottom");
@@ -287,7 +290,7 @@
     aria-haspopup="listbox"
     aria-expanded={isOpen}
     aria-controls={listboxId}
-    aria-label={ariaLabel ?? placeholder}
+    aria-label={ariaLabel ?? resolvedPlaceholder}
     aria-activedescendant={isOpen && highlightedIndex >= 0 ? `${instanceId}-opt-${highlightedIndex}` : undefined}
     {disabled}
     onclick={toggleDropdown}
@@ -301,7 +304,7 @@
       {/if}
 
       <span class="iris-trigger-label" class:is-placeholder={!selectedItem}>
-        {selectedItem ? selectedItem.label : placeholder}
+        {selectedItem ? selectedItem.label : resolvedPlaceholder}
       </span>
     </div>
 
