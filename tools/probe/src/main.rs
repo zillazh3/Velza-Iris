@@ -19,7 +19,8 @@ fn main() {
         Some("listen") => listen(a.get(1).map_or("9001", String::as_str)),
         Some("send") => send(&a[1..]),
         Some("rate") => rate(&a[1..]),
-        _ => Err("uso: probe tree [host:port] | listen [port] | send <addr> [args…] [--to host:port] | rate <hz> <secs> [radius]".into()),
+        Some("latency") => latency(&a[1..]),
+        _ => Err("uso: probe tree [host:port] | listen [port] | send <addr> [args…] [--to host:port] | rate <hz> <secs> [radius] | latency [step_m]".into()),
     };
     if let Err(e) = r {
         eprintln!("error: {e}");
@@ -251,6 +252,69 @@ fn rate(a: &[String]) -> Res<()> {
         sum / n as f64
     );
     // Devuelve la cámara a donde estaba.
+    send_to(&tx, VRC_SEND, "/usercamera/Pose", base.into_iter().map(OscType::Float).collect())
+}
+
+/// Mide la latencia de transporte (τ_d: 10% del escalón) y el tiempo de establecimiento (τ_s: 90% del escalón)
+/// enviando un desplazamiento controlado sobre `/usercamera/Pose`. No requiere VRC+.
+fn latency(a: &[String]) -> Res<()> {
+    let step_m: f32 = a.first().map_or(Ok(0.20), |s| s.parse())?;
+    let rx = bind("9001")?;
+    let latest: Arc<Mutex<Option<(Instant, Vec<f32>)>>> = Arc::default();
+    {
+        let latest = latest.clone();
+        std::thread::spawn(move || {
+            recv_loop(&rx, |m| {
+                if m.addr == "/usercamera/Pose" {
+                    let v: Vec<f32> = m.args.iter().filter_map(|x| x.clone().float()).collect();
+                    if v.len() >= 6 {
+                        *latest.lock().unwrap() = Some((Instant::now(), v));
+                    }
+                }
+            })
+        });
+    }
+
+    println!("esperando Pose base de VRChat (mueve ligeramente la cámara, 15 s)…");
+    let t0 = Instant::now();
+    let base = loop {
+        if let Some((_, p)) = latest.lock().unwrap().clone() {
+            break p;
+        }
+        if t0.elapsed() > Duration::from_secs(15) {
+            return Err("no llegó /usercamera/Pose; ¿cámara abierta?".into());
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+
+    let tx = UdpSocket::bind("127.0.0.1:0")?;
+    let mut target = base.clone();
+    target[0] += step_m;
+
+    let sent_at = Instant::now();
+    send_to(&tx, VRC_SEND, "/usercamera/Pose", target.into_iter().map(OscType::Float).collect())?;
+
+    let (mut t10_ms, mut t90_ms) = (None, None);
+    while sent_at.elapsed() < Duration::from_secs(2) {
+        if let Some((stamp, p)) = latest.lock().unwrap().clone() {
+            if stamp >= sent_at {
+                let dx = (p[0] - base[0]).abs();
+                if t10_ms.is_none() && dx >= step_m.abs() * 0.10 {
+                    t10_ms = Some(stamp.duration_since(sent_at).as_secs_f64() * 1e3);
+                }
+                if t90_ms.is_none() && dx >= step_m.abs() * 0.90 {
+                    t90_ms = Some(stamp.duration_since(sent_at).as_secs_f64() * 1e3);
+                    break;
+                }
+            }
+        }
+        std::thread::sleep(Duration::from_millis(2));
+    }
+
+    println!(
+        "escalón {:.2} m -> τ_d (10%) = {:?} ms, τ_s (90%) = {:?} ms",
+        step_m, t10_ms, t90_ms
+    );
     send_to(&tx, VRC_SEND, "/usercamera/Pose", base.into_iter().map(OscType::Float).collect())
 }
 

@@ -9,6 +9,15 @@ use std::time::Duration;
 /// Mismo encuadre que "Cuerpo completo (ref)": 3.5 m, a la altura de la cadera.
 pub const DISTANCE: f32 = 3.5;
 pub const HEIGHT: f32 = -0.75;
+/// Focal (mm) para que un avatar de cuerpo completo llene ~90 % del alto del cuadro a 3.5 m.
+/// Medido en vivo: con 45 mm ocupaba ~58 % (el sensor efectivo de VRChat es mayor que los 24 mm supuestos).
+pub const ZOOM: f32 = 68.0;
+
+/// `LookAtMe` apunta a los ojos; con la cámara en la cadera eso inclina la vista hacia arriba y corta las piernas.
+/// Este offset vertical (°) nivela la mirada para encuadrar el centro del cuerpo.
+pub fn look_at_y_offset() -> f32 {
+    (-HEIGHT).atan2(DISTANCE).to_degrees()
+}
 
 /// Yaw de cada parada (0° = frente al jugador, + = a su derecha). 4 vistas: frente, ¾, perfil, espalda.
 pub fn yaws(four_views: bool) -> Vec<f32> {
@@ -141,6 +150,13 @@ mod tests {
         assert_eq!(yaws(false), [0.0, 45.0, 90.0, 135.0, 180.0, 225.0, 270.0, 315.0]);
         assert_eq!(yaws(true), [0.0, 45.0, 90.0, 180.0]);
         assert_eq!(frame(90.0).distance, 3.5);
+    }
+
+    #[test]
+    fn level_offset_cancels_the_upward_tilt() {
+        // la cámara a -0.75 m mira hacia arriba atan(0.75/3.5) ≈ 12.1°; el offset lo compensa
+        assert!((look_at_y_offset() - 12.09).abs() < 0.01);
+        assert!(look_at_y_offset() <= 25.0, "dentro del rango de LookAtMeYOffset");
     }
 
     #[test]
