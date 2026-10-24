@@ -6,8 +6,8 @@ Eres el ingeniero principal de **Velza Iris**, una app de escritorio **portable*
 
 - **Línea de producto:** **VELZA** (Velvet + Zilla). Es una línea nueva e independiente. **No** uses nombres, logos, prefijos ni estética de "ZH3" ni "ZHEYA" en ningún archivo, string, metadata o asset.
 - **Autor/publisher:** Zilla (usar `Zilla` como company/publisher en metadata del .exe).
-- **Idioma de la UI:** español (México) por defecto + inglés. Todo string en archivos de localización, nada hardcodeado.
-- **Comunicación conmigo:** responde en español mexicano, conciso y técnico.
+- **Idioma de la UI:** español (México) por defecto + inglés. Todo string en archivos de localización (`src/lib/i18n/es-MX.json` y `en.json`), nada hardcodeado.
+- **Comunicación e internacionalización:** por defecto responde en español mexicano, conciso y técnico. Si el usuario se comunica o solicita trabajar en inglés o en flujos de internacionalización, responde y genera todo texto en inglés técnico natural, profesional y cinematográfico, sin filtraciones de español. No traducir rutas (`VelzaIris-data/`), nombres de paquetes, endpoints OSC (`/usercamera/*`), propiedades de modelos (`rawPose`, `knotMode`, etc.) ni contenido generado por el usuario.
 
 ### Diferenciación (lo que NO debemos copiar)
 - La cámara de VRChat ya guarda presets internos y existe **CameraMaster OSC** (Booth) que guarda 8–16 posiciones **absolutas en el mundo**.
