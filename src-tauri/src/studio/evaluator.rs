@@ -311,15 +311,17 @@ fn apply_effect_clip(
             pose.rot[0] = (pose.rot[0] - breath * 0.35 * k).clamp(-89.9, 89.9);
         }
         EffectKind::SmoothZoom => {
-            let z0 = clip.param_a.unwrap_or(zoom.unwrap_or(45.0));
-            let z1 = clip.param_b.unwrap_or((z0 + 25.0 * k).clamp(20.0, 300.0));
-            *zoom = Some(lerp(z0, z1, u).clamp(20.0, 300.0));
+            let z0 = clip.param_a.filter(|v| v.is_finite()).unwrap_or_else(|| zoom.unwrap_or(45.0)).clamp(20.0, 300.0);
+            let z1 = clip.param_b.filter(|v| v.is_finite()).unwrap_or((z0 + 25.0 * k).clamp(20.0, 300.0)).clamp(20.0, 300.0);
+            let res = lerp(z0, z1, u);
+            *zoom = Some(if res.is_finite() { res.clamp(20.0, 300.0) } else { 45.0 });
         }
         EffectKind::CrashZoom => {
-            let z0 = clip.param_a.unwrap_or(zoom.unwrap_or(35.0));
-            let z1 = clip.param_b.unwrap_or((z0 + 65.0 * k).clamp(20.0, 300.0));
+            let z0 = clip.param_a.filter(|v| v.is_finite()).unwrap_or_else(|| zoom.unwrap_or(35.0)).clamp(20.0, 300.0);
+            let z1 = clip.param_b.filter(|v| v.is_finite()).unwrap_or((z0 + 65.0 * k).clamp(20.0, 300.0)).clamp(20.0, 300.0);
             let expo = if raw_u < 0.5 { 8.0 * raw_u.powi(4) } else { 1.0 - (-2.0 * raw_u + 2.0).powi(4) / 2.0 };
-            *zoom = Some(lerp(z0, z1, expo).clamp(20.0, 300.0));
+            let res = lerp(z0, z1, expo);
+            *zoom = Some(if res.is_finite() { res.clamp(20.0, 300.0) } else { 45.0 });
         }
         EffectKind::FocusPull => {
             let f0 = clip.param_a.unwrap_or(focal_distance.unwrap_or(2.5));
@@ -332,13 +334,14 @@ fn apply_effect_clip(
             *aperture = Some(lerp(a0, a1, u).clamp(1.4, 32.0));
         }
         EffectKind::DollyZoom => {
-            let dist_delta = clip.param_a.unwrap_or(1.5) * k * u;
+            let dist_delta = clip.param_a.filter(|v| v.is_finite()).unwrap_or(1.5) * k * u;
             for i in 0..3 {
                 pose.pos[i] -= fwd[i] * dist_delta;
             }
             let d = dist3(pose.pos, pivot).max(0.3);
-            let per_meter = clip.param_b.unwrap_or(22.0);
-            *zoom = Some((d * per_meter).clamp(20.0, 300.0));
+            let per_meter = clip.param_b.filter(|v| v.is_finite()).unwrap_or(22.0);
+            let res = d * per_meter;
+            *zoom = Some(if res.is_finite() { res.clamp(20.0, 300.0) } else { 45.0 });
         }
     }
 }

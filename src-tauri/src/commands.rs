@@ -347,8 +347,8 @@ pub fn play_motion(name: String, app: AppHandle, st: State<App>) -> Result<(), S
         let cam = st.camera.lock().unwrap();
         let cam = cam.as_ref().ok_or("sin conexión con VRChat")?;
         cam.pose(&pose)?;
-        if let Some(z) = o.sample.zoom {
-            cam.set("Zoom", Value::F(z))?;
+        if let Some(z) = o.sample.zoom.filter(|z| z.is_finite()) {
+            let _ = cam.set("Zoom", Value::F(z));
         }
         Ok(())
     }));
@@ -664,17 +664,17 @@ pub fn play_sequence(
         let cam = st.camera.lock().unwrap();
         let cam = cam.as_ref().ok_or("Se perdió la conexión con VRChat")?;
         cam.pose(&pose_to_send)?;
-        if let Some(z) = ev.zoom {
-            cam.set("Zoom", Value::F(z))?;
+        if let Some(z) = ev.zoom.filter(|z| z.is_finite()) {
+            let _ = cam.set("Zoom", Value::F(z));
         }
-        if let Some(e) = ev.exposure {
-            cam.set("Exposure", Value::F(e))?;
+        if let Some(e) = ev.exposure.filter(|e| e.is_finite()) {
+            let _ = cam.set("Exposure", Value::F(e));
         }
-        if let Some(fd) = ev.focal_distance {
-            cam.set("FocalDistance", Value::F(fd))?;
+        if let Some(fd) = ev.focal_distance.filter(|fd| fd.is_finite()) {
+            let _ = cam.set("FocalDistance", Value::F(fd));
         }
-        if let Some(ap) = ev.aperture {
-            cam.set("Aperture", Value::F(ap))?;
+        if let Some(ap) = ev.aperture.filter(|ap| ap.is_finite()) {
+            let _ = cam.set("Aperture", Value::F(ap));
         }
         Ok(())
     });
