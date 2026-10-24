@@ -1,3 +1,5 @@
+import { t, type Key } from "$lib/i18n/index.svelte";
+
 export type ThemeMode = "system" | "light" | "dark";
 export type ResolvedTheme = "light" | "dark";
 export type AccentPreset = "electric" | "violet" | "emerald" | "rose" | "amber" | "cyan";
@@ -5,18 +7,24 @@ export type AccentPreset = "electric" | "violet" | "emerald" | "rose" | "amber" 
 export interface AccentDefinition {
   id: AccentPreset;
   name: string;
+  labelKey: Key;
   hex: string;
   rgb: string;
 }
 
 export const ACCENT_PRESETS: Record<AccentPreset, AccentDefinition> = {
-  electric: { id: "electric", name: "Azul Eléctrico", hex: "#3d5afe", rgb: "61, 90, 254" },
-  violet: { id: "violet", name: "Violeta Neón", hex: "#8b5cf6", rgb: "139, 92, 246" },
-  emerald: { id: "emerald", name: "Esmeralda", hex: "#10b981", rgb: "16, 185, 129" },
-  rose: { id: "rose", name: "Coral / Rosa", hex: "#f43f5e", rgb: "244, 63, 94" },
-  amber: { id: "amber", name: "Ámbar Cálido", hex: "#f59e0b", rgb: "245, 158, 11" },
-  cyan: { id: "cyan", name: "Cian Cibernético", hex: "#06b6d4", rgb: "6, 182, 212" },
+  electric: { id: "electric", name: "Azul Eléctrico", labelKey: "theme.accent.electric", hex: "#3d5afe", rgb: "61, 90, 254" },
+  violet: { id: "violet", name: "Violeta Neón", labelKey: "theme.accent.violet", hex: "#8b5cf6", rgb: "139, 92, 246" },
+  emerald: { id: "emerald", name: "Esmeralda", labelKey: "theme.accent.emerald", hex: "#10b981", rgb: "16, 185, 129" },
+  rose: { id: "rose", name: "Coral / Rosa", labelKey: "theme.accent.rose", hex: "#f43f5e", rgb: "244, 63, 94" },
+  amber: { id: "amber", name: "Ámbar Cálido", labelKey: "theme.accent.amber", hex: "#f59e0b", rgb: "245, 158, 11" },
+  cyan: { id: "cyan", name: "Cian Cibernético", labelKey: "theme.accent.cyan", hex: "#06b6d4", rgb: "6, 182, 212" },
 };
+
+export function getAccentName(id: AccentPreset): string {
+  const def = ACCENT_PRESETS[id];
+  return def ? t(def.labelKey) : id;
+}
 
 let mode = $state<ThemeMode>("system");
 let resolved = $state<ResolvedTheme>("dark");

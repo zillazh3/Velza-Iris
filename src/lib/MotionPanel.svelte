@@ -2,7 +2,7 @@
   import { onMount } from "svelte";
   import { ArrowLeftRight, OctagonX, Pause, Play, Repeat, RotateCw, Square } from "@lucide/svelte";
   import { api, type Motion, type MotionStatus, type TurnaroundProgress } from "$lib/api";
-  import { t, type Key } from "$lib/i18n/index.svelte";
+  import { t, localizeMotionName, type Key } from "$lib/i18n/index.svelte";
 
   let { ready, run }: { ready: boolean; run: (action: () => Promise<unknown>, okText?: string) => Promise<void> } = $props();
 
@@ -51,7 +51,7 @@
   {#if active}
     <div class="card controls" aria-live="polite">
       <div class="now">
-        <strong>{status.name}</strong>
+        <strong>{status.name ? localizeMotionName(status.name) : ""}</strong>
         <span class="state" class:on={status.state === "playing"}>{t(`motion.state.${status.state}` as Key)}</span>
       </div>
       <div class="buttons">
@@ -95,7 +95,7 @@
   <div class="grid">
     {#each motions as m (m.name)}
       <article class="card">
-        <h4>{m.name}</h4>
+        <h4>{localizeMotionName(m.name)}</h4>
         <p class="meta">
           <span>{t("motion.duration", { s: m.duration })}</span>
           <span>{t(`motion.loop.${m.loop}` as Key)}</span>

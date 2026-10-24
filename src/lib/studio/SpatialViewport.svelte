@@ -10,6 +10,7 @@
     selectedKeyframeId = null,
     compact = false,
     onSelectKeyframe,
+    onUpdateKeyframePos,
   }: {
     preview: TrajectoryPreview | null;
     currentFrame: EvaluatedFrame | null;
@@ -17,6 +18,7 @@
     selectedKeyframeId?: string | null;
     compact?: boolean;
     onSelectKeyframe?: (id: string) => void;
+    onUpdateKeyframePos?: (id: string, pos: [number, number, number]) => void;
   } = $props();
 
   type ViewMode = "orbit" | "top" | "side";
@@ -26,6 +28,15 @@
   let zoomScale = $state(1);
   let dragging = $state(false);
   let lastMouse = $state<[number, number]>([0, 0]);
+
+  let draggingNodeId = $state<string | null>(null);
+  let draggingNodePos = $state<[number, number, number] | null>(null);
+  let draggingNodeLabel = $state<string>("");
+  let dragOriginWorld = $state<[number, number, number] | null>(null);
+  let dragOriginClient = $state<[number, number] | null>(null);
+  let dragFrozenScale = $state<number>(1);
+  let dragSvgScale = $state<[number, number]>([1, 1]);
+  let svgEl = $state<SVGSVGElement | null>(null);
 
   const W = 560;
   const H = 310;
@@ -124,13 +135,81 @@
     return lines;
   });
 
+  function onNodePointerDown(nodeId: string, worldPos: [number, number, number], label: string, e: PointerEvent) {
+    e.stopPropagation();
+    e.preventDefault();
+    onSelectKeyframe?.(nodeId);
+    draggingNodeId = nodeId;
+    draggingNodePos = [worldPos[0], worldPos[1], worldPos[2]];
+    draggingNodeLabel = label;
+    dragOriginWorld = [worldPos[0], worldPos[1], worldPos[2]];
+    dragOriginClient = [e.clientX, e.clientY];
+
+    // Congelar la escala espacial en el momento del click para evitar saltos o recientes dinámicos
+    dragFrozenScale = (Math.min(W, H) / Math.max(1, bounds.span)) * 0.78 * zoomScale;
+
+    // Medir la relación real entre píxeles de pantalla y unidades del SVG viewBox
+    if (svgEl) {
+      const rect = svgEl.getBoundingClientRect();
+      const sx = rect.width > 0 ? rect.width / W : 1;
+      const sy = rect.height > 0 ? rect.height / H : 1;
+      dragSvgScale = [sx, sy];
+    } else {
+      dragSvgScale = [1, 1];
+    }
+
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+  }
+
   function onPointerDown(e: PointerEvent) {
+    if (draggingNodeId) return;
     if (viewMode !== "orbit") return;
     dragging = true;
     lastMouse = [e.clientX, e.clientY];
   }
 
   function onPointerMove(e: PointerEvent) {
+    if (draggingNodeId && dragOriginWorld && dragOriginClient) {
+      const totalClientDx = e.clientX - dragOriginClient[0];
+      const totalClientDy = e.clientY - dragOriginClient[1];
+
+      // Convertir desplazamiento de pantalla a unidades SVG del viewBox
+      const svgDx = totalClientDx / dragSvgScale[0];
+      const svgDy = totalClientDy / dragSvgScale[1];
+
+      // Convertir unidades SVG a metros de mundo usando la escala fija del inicio del arrastre
+      const scale = Math.max(0.001, dragFrozenScale);
+      let newX = dragOriginWorld[0];
+      let newY = dragOriginWorld[1];
+      let newZ = dragOriginWorld[2];
+
+      if (viewMode === "top") {
+        // En top view: pantalla X -> mundo X, pantalla Y (abajo) -> mundo Z (atrás)
+        newX = dragOriginWorld[0] + svgDx / scale;
+        newZ = dragOriginWorld[2] - svgDy / scale;
+      } else if (viewMode === "side") {
+        // En side view: pantalla X -> mundo Z, pantalla Y (abajo) -> mundo Y (abajo)
+        newZ = dragOriginWorld[2] + svgDx / scale;
+        newY = dragOriginWorld[1] - svgDy / scale;
+      } else {
+        // En vista orbital 3D: orientar sobre el plano del ángulo de cámara
+        const yawRad = (orbitYaw * Math.PI) / 180;
+        const cosY = Math.cos(yawRad);
+        const sinY = Math.sin(yawRad);
+        newX = dragOriginWorld[0] + (svgDx * cosY) / scale;
+        newZ = dragOriginWorld[2] - (svgDx * sinY) / scale;
+        newY = dragOriginWorld[1] - svgDy / scale;
+      }
+
+      newX = Math.round(newX * 100) / 100;
+      newY = Math.round(newY * 100) / 100;
+      newZ = Math.round(newZ * 100) / 100;
+
+      draggingNodePos = [newX, newY, newZ];
+      onUpdateKeyframePos?.(draggingNodeId, [newX, newY, newZ]);
+      return;
+    }
+
     if (!dragging || viewMode !== "orbit") return;
     const dx = e.clientX - lastMouse[0];
     const dy = e.clientY - lastMouse[1];
@@ -141,6 +220,10 @@
 
   function onPointerUp() {
     dragging = false;
+    draggingNodeId = null;
+    draggingNodePos = null;
+    dragOriginWorld = null;
+    dragOriginClient = null;
   }
 
   function resetView() {
@@ -186,6 +269,7 @@
 
   <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
   <svg
+    bind:this={svgEl}
     viewBox="0 0 {W} {H}"
     class="vp-svg"
     role="img"
@@ -232,7 +316,7 @@
           stroke="#b8a9ff"
           stroke-width="2"
         />
-        <text x={aProj.x + 10} y={aProj.y + 4} fill="#b8a9ff" font-size="11" font-weight="600">Ancla</text>
+        <text x={aProj.x + 10} y={aProj.y + 4} fill="#b8a9ff" font-size="11" font-weight="600">{t("viewport.anchor")}</text>
       </g>
     {/if}
 
@@ -242,7 +326,7 @@
       <g class="target-marker">
         <circle cx={tProj.x} cy={tProj.y} r="8" fill="none" stroke="#ff708d" stroke-width="1.8" stroke-dasharray="2 2" />
         <circle cx={tProj.x} cy={tProj.y} r="3" fill="#ff708d" />
-        <text x={tProj.x + 10} y={tProj.y + 4} fill="#ff708d" font-size="11">Objetivo</text>
+        <text x={tProj.x + 10} y={tProj.y + 4} fill="#ff708d" font-size="11">{t("viewport.target")}</text>
       </g>
     {/if}
 
@@ -279,6 +363,8 @@
         <!-- svelte-ignore a11y_no_static_element_interactions -->
         <g
           class="kf-node"
+          class:is-dragging={draggingNodeId === node.id}
+          onpointerdown={(e) => onNodePointerDown(node.id, node.worldPos, node.label, e)}
           onclick={(e) => {
             e.stopPropagation();
             onSelectKeyframe?.(node.id);
@@ -302,6 +388,33 @@
           </text>
         </g>
       {/each}
+
+      {#if draggingNodeId && draggingNodePos}
+        {@const pDrag = project(draggingNodePos)}
+        <g class="drag-coord-tooltip">
+          <rect
+            x={pDrag.x - 90}
+            y={pDrag.y - 42}
+            width="180"
+            height="24"
+            rx="6"
+            fill="rgba(22, 16, 36, 0.95)"
+            stroke="var(--accent, #3d5afe)"
+            stroke-width="1.5"
+          />
+          <text
+            x={pDrag.x}
+            y={pDrag.y - 26}
+            text-anchor="middle"
+            fill="#ffffff"
+            font-size="10.5"
+            font-weight="600"
+            font-family="monospace"
+          >
+            {draggingNodeLabel}: {draggingNodePos[0].toFixed(2)}, {draggingNodePos[1].toFixed(2)}, {draggingNodePos[2].toFixed(2)}m
+          </text>
+        </g>
+      {/if}
     {/if}
 
     <!-- Pose Evaluada en el Cursor Actual (Playhead) -->
@@ -319,23 +432,22 @@
       <g class="live-vrc-cam">
         <circle cx={lProj.x} cy={lProj.y} r="8" fill="none" stroke="#4ade80" stroke-width="2" />
         <circle cx={lProj.x} cy={lProj.y} r="3" fill="#4ade80" />
-        <text x={lProj.x + 11} y={lProj.y + 4} fill="#4ade80" font-size="10.5" font-weight="600">VRChat Real</text>
+        <text x={lProj.x + 11} y={lProj.y + 4} fill="#4ade80" font-size="10.5" font-weight="600">{t("viewport.liveVrc")}</text>
       </g>
     {/if}
   </svg>
 
   <div class="vp-footer">
     <div class="legend">
-      <span><i class="dot start"></i> Inicio</span>
-      <span><i class="dot mid"></i> Intermedio</span>
-      <span><i class="dot end"></i> Final</span>
-      <span><i class="dot vrc"></i> Lectura VRChat</span>
-      <span><i class="dot cursor"></i> Cursor (Interpolado)</span>
+      <span><i class="dot start"></i> {t("viewport.legend.start")}</span>
+      <span><i class="dot mid"></i> {t("viewport.legend.mid")}</span>
+      <span><i class="dot end"></i> {t("viewport.legend.end")}</span>
+      <span><i class="dot vrc"></i> {t("viewport.legend.vrc")}</span>
+      <span><i class="dot cursor"></i> {t("viewport.legend.cursor")}</span>
     </div>
     {#if preview}
       <span class="dist-info">
-        <Eye size={13} /> Recorrido: <strong>{preview.totalDistance.toFixed(2)} m</strong>
-        ({preview.nodes.length} puntos)
+        <Eye size={13} /> {t("viewport.pathInfo", { dist: preview.totalDistance.toFixed(2), nodes: preview.nodes.length })}
       </span>
     {/if}
   </div>
@@ -399,7 +511,19 @@
     cursor: grabbing;
   }
   .kf-node {
-    cursor: pointer;
+    cursor: grab;
+    transition: filter 120ms ease;
+  }
+  .kf-node:hover {
+    filter: drop-shadow(0 0 6px var(--accent, #3d5afe));
+  }
+  .kf-node:active,
+  .kf-node.is-dragging {
+    cursor: grabbing;
+  }
+  .drag-coord-tooltip {
+    pointer-events: none;
+    filter: drop-shadow(0 4px 12px rgba(0, 0, 0, 0.6));
   }
   .vp-footer {
     display: flex;

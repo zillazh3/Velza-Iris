@@ -33,12 +33,14 @@
     Moon,
     Sun,
     Palette,
+    Keyboard,
   } from "@lucide/svelte";
   import { api, type Preset, type SequenceProject, type Status } from "$lib/api";
-  import { i18n, t, type Key } from "$lib/i18n/index.svelte";
+  import { i18n, t, pointLabel, localizeError, localizePresetName, type Key } from "$lib/i18n/index.svelte";
   import MotionPanel from "$lib/MotionPanel.svelte";
   import StudioWorkspace from "$lib/studio/StudioWorkspace.svelte";
   import IrisSelect, { type SelectOption } from "$lib/components/ui/IrisSelect.svelte";
+  import KeybindingsModal from "$lib/components/ui/KeybindingsModal.svelte";
   import { themeManager, ACCENT_PRESETS, type ThemeMode, type AccentPreset } from "$lib/theme/theme.svelte";
 
   type MainView = "home" | "framings" | "studio" | "library" | "community" | "settings";
@@ -87,7 +89,7 @@
     keyframes: [
       {
         id: "kf-a",
-        label: "Punto A",
+        label: pointLabel(0),
         time: 0,
         rawPose: { pos: [-1.2, 1.3, 1.8], rot: [-11, 146, 0] },
         localPose: { pos: [-1.2, -0.35, 1.8], rot: [-11, 146, 0] },
@@ -98,7 +100,7 @@
       },
       {
         id: "kf-b",
-        label: "Punto B",
+        label: pointLabel(1),
         time: 5,
         rawPose: { pos: [0, 1.7, 1.35], rot: [2, 180, 0] },
         localPose: { pos: [0, 0.05, 1.35], rot: [2, 180, 0] },
@@ -109,7 +111,7 @@
       },
       {
         id: "kf-c",
-        label: "Punto C",
+        label: pointLabel(2),
         time: 10,
         rawPose: { pos: [1.2, 1.9, 1.9], rot: [7.5, -148, 0] },
         localPose: { pos: [1.2, 0.25, 1.9], rot: [7.5, -148, 0] },
@@ -143,6 +145,7 @@
   let collapsed = $state(false);
   let narrow = $state(false);
   let importJsonText = $state("");
+  let showKeybindingsModal = $state(false);
   const rail = $derived(collapsed || narrow);
 
   const navItems: { id: MainView; key: Key; icon: typeof Home }[] = [
@@ -165,18 +168,20 @@
     ref_sheet: Grid3x3,
   } as const;
 
-  const themeModeOptions: SelectOption<ThemeMode>[] = [
-    { value: "system", label: "Sistema (Auto-detección)", icon: Monitor, description: "Sincroniza con el esquema de Windows" },
-    { value: "dark", label: "Modo Oscuro Prémium", icon: Moon, description: "Obsidiana profunda, cristal esmerilado y sombras ambientales" },
-    { value: "light", label: "Modo Claro Prémium", icon: Sun, description: "Blanco cálido hueso y sombras difusas" },
-  ];
+  const themeModeOptions = $derived<SelectOption<ThemeMode>[]>([
+    { value: "system", label: t("theme.mode.system.label"), icon: Monitor, description: t("theme.mode.system.desc") },
+    { value: "dark", label: t("theme.mode.dark.label"), icon: Moon, description: t("theme.mode.dark.desc") },
+    { value: "light", label: t("theme.mode.light.label"), icon: Sun, description: t("theme.mode.light.desc") },
+  ]);
 
-  const accentPresetOptions = Object.values(ACCENT_PRESETS).map((preset) => ({
-    value: preset.id,
-    label: preset.name,
-    icon: Sparkles,
-    description: preset.hex,
-  }));
+  const accentPresetOptions = $derived<SelectOption<AccentPreset>[]>(
+    Object.values(ACCENT_PRESETS).map((preset) => ({
+      value: preset.id,
+      label: t(preset.labelKey),
+      icon: Sparkles,
+      description: preset.hex,
+    }))
+  );
 
   const count = (c: "all" | Category) =>
     (c === "all" ? presets.length : presets.filter((p) => p.category === c).length) +
@@ -194,7 +199,7 @@
       await action();
       message = okText ? { text: okText, ok: true } : null;
     } catch (e) {
-      message = { text: String(e), ok: false };
+      message = { text: localizeError(e), ok: false };
     }
   }
 
@@ -224,14 +229,14 @@
   async function copySequenceJson(seq: SequenceProject) {
     const raw = JSON.stringify(seq, null, 2);
     await navigator.clipboard.writeText(raw);
-    message = { text: `JSON de «${seq.name}» copiado al portapapeles.`, ok: true };
+    message = { text: t("toast.jsonCopied", { name: seq.name }), ok: true };
   }
 
   async function copyDollyJson(seq: SequenceProject, bakeEffects: boolean) {
     await run(async () => {
       const raw = await api.exportVrcDolly(seq, bakeEffects);
       await navigator.clipboard.writeText(raw);
-    }, `Trayectoria Camera Dolly de «${seq.name}» copiada al portapapeles.`);
+    }, t("toast.dollyCopied", { name: seq.name }));
   }
 
   async function handleImportSequence() {
@@ -243,7 +248,7 @@
       activeProject = structuredClone(imported);
       importJsonText = "";
       activeView = "studio";
-    }, "Secuencia importada y abierta en Iris Studio.");
+    }, t("toast.sequenceImported"));
   }
 
   async function handleImportDolly() {
@@ -255,7 +260,7 @@
       activeProject = structuredClone(imported);
       importJsonText = "";
       activeView = "studio";
-    }, "Trayectoria Camera Dolly importada y lista para reproducirse en Iris Studio sin VRC+.");
+    }, t("toast.dollyImported"));
   }
 
   async function handleDeleteSequence(id: string) {
@@ -266,7 +271,7 @@
       if (activeProject.id === id && sequences.length > 0) {
         activeProject = structuredClone(sequences[0]);
       }
-    }, "Secuencia eliminada.");
+    }, t("toast.sequenceDeleted"));
   }
 
   onMount(() => {
@@ -350,22 +355,29 @@
     <!-- Cabecera global compacta con indicadores de Conexión, Cámara, Lectura de Pose y Calibración -->
     <header class="global-status-bar">
       <div class="chips" aria-live="polite">
-        <span class="chip" class:on={status.connected} title="Estado de conexión OSCQuery con VRChat">
+        <span class="chip" class:on={status.connected} title={t("status.tooltip.connected")}>
           <Plug size={15} /> {t(status.connected ? "status.connected" : "status.disconnected")}
         </span>
-        <span class="chip" class:on={status.open} title="Estado de apertura de la cámara en VRChat">
+        <span class="chip" class:on={status.open} title={t("status.tooltip.camera")}>
           <Camera size={15} /> {t(status.open ? "status.open" : "status.closed")}
         </span>
         <span
           class="chip"
           class:on={Boolean(status.camera?.poseFresh)}
-          title="Indica si VRChat ya emitió la posición exacta actual de tu cámara"
+          title={t("status.tooltip.pose")}
         >
           <Activity size={15} />
           {t(status.camera?.poseFresh ? "status.poseFresh" : "status.poseStale")}
         </span>
-        <span class="chip" class:on={status.anchored} title="Origen relativo para presets y secuencias portables">
-          <Crosshair size={15} /> {t(status.anchored ? "status.anchored" : "status.unanchored")}
+        <span
+          class="chip"
+          class:on={status.anchored}
+          title="{t('status.tooltip.anchor')}{status.anchorState ? ` · ${t(`anchor.state.${status.anchorState.state}`)}` : ''}"
+        >
+          <Crosshair size={15} />
+          {status.anchorState && (status.anchorState.state === "acquiring" || status.anchorState.state === "syncLost" || status.anchorState.state === "recovering")
+            ? t(`anchor.state.${status.anchorState.state}`)
+            : t(status.anchored ? "status.anchored" : "status.unanchored")}
         </span>
         {#if status.open}
           <button
@@ -509,7 +521,7 @@
           {#each g.items as p (p.name)}
             <article class="card preset">
               <div class="preset-top">
-                <h4>{p.name}</h4>
+                <h4>{localizePresetName(p.name)}</h4>
                 {#if p.modifier}
                   <span class="tag-badge">{t("presets.modifier")}</span>
                 {/if}
@@ -526,7 +538,7 @@
                 type="button"
                 class="primary sm"
                 disabled={!ready(p)}
-                title={p.frame && !status.anchored ? t("presets.needAnchor") : "Aplicar encuadre a la cámara de VRChat"}
+                title={p.frame && !status.anchored ? t("presets.needAnchor") : t("presets.applyTooltip")}
                 onclick={() => run(() => api.applyPreset(p.name))}
               >
                 {t("presets.apply")}
@@ -557,7 +569,7 @@
       <section class="lib-section">
         <div class="sec-head">
           <h2>{t("library.sequences")}</h2>
-          <span class="sub">Archivos guardados en `VelzaIris-data/sequences/`</span>
+          <span class="sub">{t("library.sub")}</span>
         </div>
 
         <div class="grid">
@@ -570,10 +582,10 @@
                     ? `${Math.round((seq.duration / 60) * 1000) / 1000} min (${seq.duration} s)`
                     : `${seq.duration} s`}
                 </span>
-                <span>{seq.keyframes.length} puntos</span>
-                <span>{seq.effects.length} efectos</span>
+                <span>{t("library.pointsCount", { count: seq.keyframes.length })}</span>
+                <span>{t("library.effectsCount", { count: seq.effects.length })}</span>
                 <span class="tag">
-                  {seq.space === "anchor" ? "Portable (Ancla)" : "Espacio de Mundo"}
+                  {seq.space === "anchor" ? t("library.spaceAnchor") : t("library.spaceWorld")}
                 </span>
               </p>
               <div class="card-actions">
@@ -593,7 +605,7 @@
                 <button
                   type="button"
                   class="ghost sm"
-                  title="Exporta esta secuencia al formato JSON de Camera Dolly de VRChat (con efectos horneados)"
+                  title={t("library.dollyTooltip")}
                   onclick={() => copyDollyJson(seq, true)}
                 >
                   <Copy size={14} /> Dolly JSON
@@ -617,7 +629,7 @@
           <h4><Upload size={15} /> {t("library.importJson")} / VRChat Camera Dolly</h4>
           <textarea
             rows="3"
-            placeholder="Pega aquí el JSON de una secuencia de Iris Studio o un archivo .json de VRChat Camera Dolly (CameraPaths)…"
+            placeholder={t("library.importPlaceholder")}
             bind:value={importJsonText}
           ></textarea>
           <div class="card-actions">
@@ -633,10 +645,10 @@
               type="button"
               class="ghost sm"
               disabled={!importJsonText.trim()}
-              title="Importa una trayectoria Camera Dolly oficial de VRChat para reproducirla en Velza Iris sin VRC+"
+              title={t("library.importDollyTooltip")}
               onclick={handleImportDolly}
             >
-              <Upload size={14} /> Importar Camera Dolly (Sin VRC+)
+              <Upload size={14} /> {t("library.importDollyBtn")}
             </button>
           </div>
         </div>
@@ -647,32 +659,23 @@
          ===================================================================== -->
     {:else if activeView === "community"}
       <section class="card community-card">
-        <span class="eyebrow"><Globe size={14} /> ECOSISTEMA VELZA IRIS</span>
+        <span class="eyebrow"><Globe size={14} /> {t("community.eyebrow")}</span>
         <h2>{t("community.title")}</h2>
         <p class="sub">{t("community.subtitle")}</p>
         <p>{t("community.desc")}</p>
 
         <div class="steps-grid">
           <article class="card step-card">
-            <h4>1. Presets Relativos (`Anchor Space`)</h4>
-            <p>
-              Las secuencias guardan desplazamientos relativos a tu ancla calibrada (`world_to_local`),
-              permitiendo reutilizar el mismo movimiento en otros mundos tras pulsar «Calibrar ancla».
-            </p>
+            <h4>{t("community.step1.title")}</h4>
+            <p>{t("community.step1.desc")}</p>
           </article>
           <article class="card step-card">
-            <h4>2. Sin requisito de VRC+</h4>
-            <p>
-              Cualquier usuario puede reproducir secuencias compartidas mediante el motor directo de
-              60 Hz sobre `/usercamera/Pose`.
-            </p>
+            <h4>{t("community.step2.title")}</h4>
+            <p>{t("community.step2.desc")}</p>
           </article>
           <article class="card step-card">
-            <h4>3. Preparado para Asset Complementario</h4>
-            <p>
-              El esquema `SequenceProject v1` incluye metadatos de espacio, escala y `TargetProvider`
-              listos para el futuro prefab de visualización espacial en VRChat.
-            </p>
+            <h4>{t("community.step3.title")}</h4>
+            <p>{t("community.step3.desc")}</p>
           </article>
         </div>
       </section>
@@ -686,22 +689,20 @@
         <section class="card theme-settings-card">
           <div class="theme-header-row">
             <div>
-              <h3>Apariencia y Sistema de Diseño</h3>
-              <p class="sub">
-                Personaliza la estética global con temas de alta fidelidad (estilo Vercel, Linear y Raycast) y color de acento dinámico.
-              </p>
+              <h3>{t("theme.title")}</h3>
+              <p class="sub">{t("theme.subtitle")}</p>
             </div>
             <div class="theme-status-pill">
               <span class="status-indicator"></span>
-              {themeManager.isDark ? "Modo Oscuro" : "Modo Claro"} · {themeManager.mode === "system" ? "Sistema" : "Manual"}
+              {themeManager.isDark ? t("theme.dark") : t("theme.light")} · {themeManager.mode === "system" ? t("theme.system") : t("theme.manual")}
             </div>
           </div>
 
           <div class="theme-grid">
             <div class="theme-field">
               <div class="theme-field-header">
-                <span class="theme-field-title">Tema de la Interfaz</span>
-                <span class="theme-field-sub">Auto-detección con prefers-color-scheme</span>
+                <span class="theme-field-title">{t("theme.mode.label")}</span>
+                <span class="theme-field-sub">{t("theme.mode.sub")}</span>
               </div>
               <IrisSelect
                 items={themeModeOptions}
@@ -713,8 +714,8 @@
 
             <div class="theme-field">
               <div class="theme-field-header">
-                <span class="theme-field-title">Color de Acento de Marca</span>
-                <span class="theme-field-sub">Tokens CSS dinámicos de acento y resplandor</span>
+                <span class="theme-field-title">{t("theme.accent.label")}</span>
+                <span class="theme-field-sub">{t("theme.accent.sub")}</span>
               </div>
               <IrisSelect
                 items={accentPresetOptions}
@@ -727,7 +728,7 @@
 
           <!-- Muestrario de paletas rápidas con swatches interactivos -->
           <div class="swatches-container">
-            <span class="swatches-label">Paleta rápida de marca:</span>
+            <span class="swatches-label">{t("theme.accent.quick")}</span>
             <div class="swatches-row">
               {#each Object.values(ACCENT_PRESETS) as preset (preset.id)}
                 <button
@@ -735,11 +736,11 @@
                   class="swatch-chip"
                   class:active={themeManager.accent === preset.id}
                   style="--accent-swatch: {preset.hex}"
-                  title="{preset.name} ({preset.hex})"
+                  title="{t(preset.labelKey)} ({preset.hex})"
                   onclick={() => themeManager.setAccent(preset.id)}
                 >
                   <span class="swatch-dot"></span>
-                  <span class="swatch-text">{preset.name}</span>
+                  <span class="swatch-text">{t(preset.labelKey)}</span>
                 </button>
               {/each}
             </div>
@@ -749,10 +750,20 @@
         <section class="card anchor-row">
           <div>
             <h3>{t("settings.language")}</h3>
-            <p class="sub">Alterna todos los textos, ayudas y nombres de efectos entre Español e Inglés.</p>
+            <p class="sub">{t("settings.langHelp")}</p>
           </div>
           <button type="button" class="primary sm" onclick={() => i18n.toggle()}>
             <Languages size={15} /> {t("lang.switch")}
+          </button>
+        </section>
+
+        <section class="card anchor-row">
+          <div>
+            <h3>{t("settings.keybindings")}</h3>
+            <p class="sub">{t("settings.keybindingsHelp")}</p>
+          </div>
+          <button type="button" class="primary sm" onclick={() => (showKeybindingsModal = true)}>
+            <Keyboard size={15} /> {t("settings.openKeybindingsBtn")}
           </button>
         </section>
 
@@ -760,23 +771,41 @@
           <h3>{t("settings.oscTitle")}</h3>
           <div class="diag-grid">
             <div>
-              <span class="diag-k">Estado OSCQuery:</span>
-              <strong>{status.connected ? "Conectado (UDP 9000 / Escucha 9001)" : "Sin conexión"}</strong>
+              <span class="diag-k">{t("settings.oscStatus")}</span>
+              <strong>{status.connected ? t("settings.oscConnected") : t("settings.oscDisconnected")}</strong>
             </div>
             <div>
-              <span class="diag-k">Paquetes `/usercamera/Pose` recibidos:</span>
+              <span class="diag-k">{t("settings.posePackets")}</span>
               <strong>{status.camera?.poseSeq ?? 0}</strong>
             </div>
             <div>
-              <span class="diag-k">Frescura de Pose (`poseFresh`):</span>
-              <strong>{status.camera?.poseFresh ? "Sí (lectura verificada)" : "No (esperando movimiento)"}</strong>
+              <span class="diag-k">{t("settings.poseFreshness")}</span>
+              <strong>{status.camera?.poseFresh ? t("settings.poseYes") : t("settings.poseNo")}</strong>
             </div>
             <div>
-              <span class="diag-k">Última Pose cruda recibida:</span>
+              <span class="diag-k">{t("settings.anchorState")}</span>
+              <strong>
+                {status.anchorState ? t(`anchor.state.${status.anchorState.state}`) : t("settings.none")}
+                {#if status.anchorState?.provenance}
+                  · {t(`anchor.prov.${status.anchorState.provenance}`)}
+                {/if}
+              </strong>
+            </div>
+            <div>
+              <span class="diag-k">{t("settings.cameraMode")}</span>
+              <strong>
+                {status.anchorState?.cameraMode ?? status.camera?.mode ?? 0}
+                {#if status.anchorState}
+                  ({t("settings.anchorTransitions")}: {status.anchorState.modeSwitchCount} / {status.anchorState.recoveryCount})
+                {/if}
+              </strong>
+            </div>
+            <div>
+              <span class="diag-k">{t("settings.lastPose")}</span>
               <code>
                 {status.camera?.pose
                   ? `XYZ [${status.camera.pose.pos.map((v) => v.toFixed(3)).join(", ")}] · PYR [${status.camera.pose.rot.map((v) => v.toFixed(1)).join("°, ")}°]`
-                  : "Ninguna"}
+                  : t("settings.none")}
               </code>
             </div>
           </div>
@@ -784,20 +813,10 @@
 
         <section class="card">
           <h3>{t("settings.companionTitle")}</h3>
-          <p class="sub">
-            Iris Studio separa estrictamente las capacidades verificadas hoy por OSC directo de las
-            extensiones experimentales basadas en consentimiento:
-          </p>
+          <p class="sub">{t("settings.companionDesc")}</p>
           <ul class="cap-list">
-            <li>
-              <strong>Viable y verificada hoy:</strong> Captura y reproducción 6DoF a 60 Hz por
-              `/usercamera/Pose`, óptica (`/usercamera/Zoom`, `Exposure`, `FocalDistance`, `Aperture`),
-              espacio relativo por Ancla Calibrada y `TargetProvider` de punto estático calibrado.
-            </li>
-            <li>
-              <strong>Experimental (Fase 9–10):</strong> Prefab de Avatar OSC y puente Udon HTTP local
-              (`VRCStringDownloader`) para visualización de líneas en mundo y seguimiento voluntario.
-            </li>
+            <li>{t("settings.companionCurrent")}</li>
+            <li>{t("settings.companionFuture")}</li>
           </ul>
         </section>
       </div>
@@ -805,6 +824,8 @@
 
     <footer>{t("footer.privacy")}</footer>
   </main>
+
+  <KeybindingsModal bind:open={showKeybindingsModal} onclose={() => (showKeybindingsModal = false)} />
 </div>
 
 <style>
@@ -825,10 +846,39 @@
     flex-direction: column;
     gap: 8px;
     padding: 20px 12px;
-    background: rgba(26, 18, 48, 0.82);
-    border-right: 1px solid rgba(184, 169, 255, 0.12);
+    background: var(--sidebar-bg, rgba(26, 18, 48, 0.85));
+    border-right: 1px solid var(--sidebar-border, rgba(184, 169, 255, 0.12));
     backdrop-filter: blur(10px);
     z-index: 10;
+    transition: background 200ms var(--ease), border-color 200ms var(--ease);
+  }
+  :global(:root[data-theme="light"]) .sidebar {
+    background: var(--sidebar-bg, #f7f6fb);
+    border-right-color: var(--sidebar-border, rgba(0, 0, 0, 0.08));
+    box-shadow: 2px 0 16px rgba(0, 0, 0, 0.03);
+  }
+  :global(:root[data-theme="light"]) .brand {
+    color: var(--royal);
+  }
+  :global(:root[data-theme="light"]) .item {
+    color: #38334c;
+    font-weight: 500;
+  }
+  :global(:root[data-theme="light"]) .item:hover {
+    color: #12101a;
+    background: rgba(0, 0, 0, 0.06);
+  }
+  :global(:root[data-theme="light"]) .item[aria-current="page"] {
+    color: var(--royal);
+    background: #ffffff;
+    border-color: var(--accent);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+    font-weight: 600;
+  }
+  :global(:root[data-theme="light"]) .pill-new {
+    background: rgba(51, 82, 234, 0.12);
+    color: var(--royal);
+    border-color: rgba(51, 82, 234, 0.25);
   }
   .brand {
     display: flex;

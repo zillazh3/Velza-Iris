@@ -44,6 +44,10 @@
     0 24px 48px -12px rgba(0, 0, 0, 0.75);
   --select-backdrop-blur: blur(20px) saturate(180%);
 
+  /* Sidebar Tokens */
+  --sidebar-bg: rgba(26, 18, 48, 0.85);
+  --sidebar-border: rgba(184, 169, 255, 0.12);
+
   color-scheme: dark;
 }
 
@@ -128,6 +132,10 @@
     0 12px 24px -4px rgba(0, 0, 0, 0.08),
     0 24px 48px -12px rgba(0, 0, 0, 0.06);
   --select-backdrop-blur: blur(16px) saturate(180%);
+
+  /* Sidebar Tokens (Modo Claro) */
+  --sidebar-bg: #f7f6fb;
+  --sidebar-border: rgba(0, 0, 0, 0.08);
 }
 
 * {
@@ -177,6 +185,13 @@ body::before {
     transition: none !important;
     animation: none !important;
   }
+}
+
+body.timeline-dragging,
+body.timeline-dragging * {
+  user-select: none !important;
+  -webkit-user-select: none !important;
+  cursor: grabbing !important;
 }
 
 /* Componentes compartidos entre páginas y paneles */

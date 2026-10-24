@@ -1,5 +1,5 @@
 import type { EffectClip, EffectKind } from "$lib/api";
-import type { Key } from "$lib/i18n/index.svelte";
+import { t, type Key } from "$lib/i18n/index.svelte";
 
 export type EffectCategory = "movement" | "micro" | "optics";
 
@@ -7,12 +7,12 @@ export type EffectCatalogEntry = {
   kind: EffectKind;
   category: EffectCategory;
   labelKey: Key;
-  shortDesc: string;
+  descKey: Key;
   defaultDuration: number;
   defaultParamA: number | null;
   defaultParamB: number | null;
-  paramALabel?: string;
-  paramBLabel?: string;
+  paramAKey?: Key;
+  paramBKey?: Key;
 };
 
 export const EFFECT_CATALOG: EffectCatalogEntry[] = [
@@ -21,81 +21,81 @@ export const EFFECT_CATALOG: EffectCatalogEntry[] = [
     kind: "dollyIn",
     category: "movement",
     labelKey: "studio.effect.dollyIn",
-    shortDesc: "Acerca la cámara suavemente hacia adelante sin alterar los puntos base.",
+    descKey: "effect.dollyIn.desc",
     defaultDuration: 3.0,
     defaultParamA: 0.8,
     defaultParamB: null,
-    paramALabel: "Distancia (m)",
+    paramAKey: "effect.dollyIn.paramA",
   },
   {
     kind: "dollyOut",
     category: "movement",
     labelKey: "studio.effect.dollyOut",
-    shortDesc: "Aleja la cámara hacia atrás para revelar el entorno.",
+    descKey: "effect.dollyOut.desc",
     defaultDuration: 3.5,
     defaultParamA: 1.2,
     defaultParamB: null,
-    paramALabel: "Distancia (m)",
+    paramAKey: "effect.dollyOut.paramA",
   },
   {
     kind: "orbit",
     category: "movement",
     labelKey: "studio.effect.orbit",
-    shortDesc: "Rodea parcialmente el ancla o punto de interés.",
+    descKey: "effect.orbit.desc",
     defaultDuration: 4.0,
     defaultParamA: 45.0,
     defaultParamB: null,
-    paramALabel: "Ángulo (°)",
+    paramAKey: "effect.orbit.paramA",
   },
   {
     kind: "truck",
     category: "movement",
     labelKey: "studio.effect.truck",
-    shortDesc: "Desplaza la cámara lateralmente (izquierda/derecha).",
+    descKey: "effect.truck.desc",
     defaultDuration: 3.0,
     defaultParamA: 0.8,
     defaultParamB: null,
-    paramALabel: "Desplazamiento (m)",
+    paramAKey: "effect.truck.paramA",
   },
   {
     kind: "crane",
     category: "movement",
     labelKey: "studio.effect.crane",
-    shortDesc: "Eleva o desciende la cámara verticalmente manteniendo el encuadre.",
+    descKey: "effect.crane.desc",
     defaultDuration: 3.5,
     defaultParamA: 0.6,
     defaultParamB: null,
-    paramALabel: "Altura (m)",
+    paramAKey: "effect.crane.paramA",
   },
   {
     kind: "pan",
     category: "movement",
     labelKey: "studio.effect.pan",
-    shortDesc: "Gira la mirada de la cámara horizontalmente.",
+    descKey: "effect.pan.desc",
     defaultDuration: 2.5,
     defaultParamA: 25.0,
     defaultParamB: null,
-    paramALabel: "Giro (°)",
+    paramAKey: "effect.pan.paramA",
   },
   {
     kind: "tilt",
     category: "movement",
     labelKey: "studio.effect.tilt",
-    shortDesc: "Inclina la mirada de la cámara hacia arriba o abajo.",
+    descKey: "effect.tilt.desc",
     defaultDuration: 2.5,
     defaultParamA: -15.0,
     defaultParamB: null,
-    paramALabel: "Inclinación (°)",
+    paramAKey: "effect.tilt.paramA",
   },
   {
     kind: "reveal",
     category: "movement",
     labelKey: "studio.effect.reveal",
-    shortDesc: "Combina retroceso, desplazamiento lateral y giro para revelar la escena.",
+    descKey: "effect.reveal.desc",
     defaultDuration: 4.0,
     defaultParamA: 1.2,
     defaultParamB: null,
-    paramALabel: "Recorrido (m)",
+    paramAKey: "effect.reveal.paramA",
   },
 
   // Microefectos
@@ -103,7 +103,7 @@ export const EFFECT_CATALOG: EffectCatalogEntry[] = [
     kind: "microShake",
     category: "micro",
     labelKey: "studio.effect.microShake",
-    shortDesc: "Vibración sutil de alta frecuencia para añadir energía o tensión.",
+    descKey: "effect.microShake.desc",
     defaultDuration: 2.0,
     defaultParamA: null,
     defaultParamB: null,
@@ -112,7 +112,7 @@ export const EFFECT_CATALOG: EffectCatalogEntry[] = [
     kind: "impactShake",
     category: "micro",
     labelKey: "studio.effect.impactShake",
-    shortDesc: "Sacudida breve con amortiguación exponencial para golpes o drops.",
+    descKey: "effect.impactShake.desc",
     defaultDuration: 0.8,
     defaultParamA: null,
     defaultParamB: null,
@@ -121,7 +121,7 @@ export const EFFECT_CATALOG: EffectCatalogEntry[] = [
     kind: "handheld",
     category: "micro",
     labelKey: "studio.effect.handheld",
-    shortDesc: "Movimiento orgánico de cámara en mano sin rigidez robótica.",
+    descKey: "effect.handheld.desc",
     defaultDuration: 5.0,
     defaultParamA: null,
     defaultParamB: null,
@@ -130,7 +130,7 @@ export const EFFECT_CATALOG: EffectCatalogEntry[] = [
     kind: "cameraDrift",
     category: "micro",
     labelKey: "studio.effect.cameraDrift",
-    shortDesc: "Flotación onírica lenta en patrón suave para planos contemplativos.",
+    descKey: "effect.cameraDrift.desc",
     defaultDuration: 6.0,
     defaultParamA: null,
     defaultParamB: null,
@@ -139,7 +139,7 @@ export const EFFECT_CATALOG: EffectCatalogEntry[] = [
     kind: "cameraBreathing",
     category: "micro",
     labelKey: "studio.effect.cameraBreathing",
-    shortDesc: "Oscilación suave al ritmo de una respiración tranquila.",
+    descKey: "effect.cameraBreathing.desc",
     defaultDuration: 6.0,
     defaultParamA: null,
     defaultParamB: null,
@@ -150,58 +150,70 @@ export const EFFECT_CATALOG: EffectCatalogEntry[] = [
     kind: "smoothZoom",
     category: "optics",
     labelKey: "studio.effect.smoothZoom",
-    shortDesc: "Transición progresiva de distancia focal (mm).",
+    descKey: "effect.smoothZoom.desc",
     defaultDuration: 4.0,
     defaultParamA: 35.0,
     defaultParamB: 65.0,
-    paramALabel: "Focal inicial (mm)",
-    paramBLabel: "Focal final (mm)",
+    paramAKey: "effect.smoothZoom.paramA",
+    paramBKey: "effect.smoothZoom.paramB",
   },
   {
     kind: "crashZoom",
     category: "optics",
     labelKey: "studio.effect.crashZoom",
-    shortDesc: "Acercamiento óptico rápido de estilo videoclip.",
+    descKey: "effect.crashZoom.desc",
     defaultDuration: 0.9,
     defaultParamA: 30.0,
     defaultParamB: 95.0,
-    paramALabel: "Focal inicial (mm)",
-    paramBLabel: "Focal final (mm)",
+    paramAKey: "effect.crashZoom.paramA",
+    paramBKey: "effect.crashZoom.paramB",
   },
   {
     kind: "focusPull",
     category: "optics",
     labelKey: "studio.effect.focusPull",
-    shortDesc: "Traslada el plano de enfoque entre dos distancias (requiere enfoque Manual en VRChat).",
+    descKey: "effect.focusPull.desc",
     defaultDuration: 3.0,
     defaultParamA: 3.0,
     defaultParamB: 1.1,
-    paramALabel: "Distancia A (m)",
-    paramBLabel: "Distancia B (m)",
+    paramAKey: "effect.focusPull.paramA",
+    paramBKey: "effect.focusPull.paramB",
   },
   {
     kind: "apertureShift",
     category: "optics",
     labelKey: "studio.effect.apertureShift",
-    shortDesc: "Abre o cierra el diafragma para desenfocar el fondo gradualmente.",
+    descKey: "effect.apertureShift.desc",
     defaultDuration: 3.5,
     defaultParamA: 11.0,
     defaultParamB: 2.0,
-    paramALabel: "Apertura inicial (f/)",
-    paramBLabel: "Apertura final (f/)",
+    paramAKey: "effect.apertureShift.paramA",
+    paramBKey: "effect.apertureShift.paramB",
   },
   {
     kind: "dollyZoom",
     category: "optics",
     labelKey: "studio.effect.dollyZoom",
-    shortDesc: "Retrocede mientras cierra la focal para mantener el tamaño del sujeto (Efecto Vértigo).",
+    descKey: "effect.dollyZoom.desc",
     defaultDuration: 4.0,
     defaultParamA: 1.5,
     defaultParamB: 22.0,
-    paramALabel: "Retroceso (m)",
-    paramBLabel: "Escala focal (mm/m)",
+    paramAKey: "effect.dollyZoom.paramA",
+    paramBKey: "effect.dollyZoom.paramB",
   },
 ];
+
+export function getEffectDesc(entry: EffectCatalogEntry): string {
+  return t(entry.descKey);
+}
+
+export function getEffectParamALabel(entry: EffectCatalogEntry): string | undefined {
+  return entry.paramAKey ? t(entry.paramAKey) : undefined;
+}
+
+export function getEffectParamBLabel(entry: EffectCatalogEntry): string | undefined {
+  return entry.paramBKey ? t(entry.paramBKey) : undefined;
+}
 
 export function createEffectClip(
   kind: EffectKind,
