@@ -10,6 +10,7 @@
     Clapperboard,
     Copy,
     Crosshair,
+    Eye,
     Film,
     Globe,
     Grid3x3,
@@ -20,17 +21,25 @@
     Orbit,
     PersonStanding,
     Plug,
+    Radio,
     RotateCcw,
     Settings,
     Sparkles,
     Trash2,
     Upload,
     UserRound,
+    Waves,
+    Monitor,
+    Moon,
+    Sun,
+    Palette,
   } from "@lucide/svelte";
   import { api, type Preset, type SequenceProject, type Status } from "$lib/api";
   import { i18n, t, type Key } from "$lib/i18n/index.svelte";
   import MotionPanel from "$lib/MotionPanel.svelte";
   import StudioWorkspace from "$lib/studio/StudioWorkspace.svelte";
+  import IrisSelect, { type SelectOption } from "$lib/components/ui/IrisSelect.svelte";
+  import { themeManager, ACCENT_PRESETS, type ThemeMode, type AccentPreset } from "$lib/theme/theme.svelte";
 
   type MainView = "home" | "framings" | "studio" | "library" | "community" | "settings";
   type Category = Preset["category"];
@@ -156,6 +165,19 @@
     ref_sheet: Grid3x3,
   } as const;
 
+  const themeModeOptions: SelectOption<ThemeMode>[] = [
+    { value: "system", label: "Sistema (Auto-detección)", icon: Monitor, description: "Sincroniza con el esquema de Windows" },
+    { value: "dark", label: "Modo Oscuro Prémium", icon: Moon, description: "Obsidiana profunda, cristal esmerilado y sombras ambientales" },
+    { value: "light", label: "Modo Claro Prémium", icon: Sun, description: "Blanco cálido hueso y sombras difusas" },
+  ];
+
+  const accentPresetOptions = Object.values(ACCENT_PRESETS).map((preset) => ({
+    value: preset.id,
+    label: preset.name,
+    icon: Sparkles,
+    description: preset.hex,
+  }));
+
   const count = (c: "all" | Category) =>
     (c === "all" ? presets.length : presets.filter((p) => p.category === c).length) +
     (c === "all" || c === "movimiento" ? motionCount : 0);
@@ -186,6 +208,14 @@
     } finally {
       polling = false;
     }
+  }
+
+  async function toggleCamera(name: string, current: boolean | undefined | null) {
+    const next = !(current ?? false);
+    await run(async () => {
+      await api.setCameraToggle(name, next);
+      await tick();
+    });
   }
 
   const ready = (p: Preset) => status.connected && status.open && (p.frame === null || status.anchored);
@@ -337,6 +367,35 @@
         <span class="chip" class:on={status.anchored} title="Origen relativo para presets y secuencias portables">
           <Crosshair size={15} /> {t(status.anchored ? "status.anchored" : "status.unanchored")}
         </span>
+        {#if status.open}
+          <button
+            type="button"
+            class="chip chip-btn"
+            class:on={Boolean(status.camera?.streaming)}
+            title={t("camera.toggle.streamingHelp")}
+            onclick={() => toggleCamera("Streaming", status.camera?.streaming)}
+          >
+            <Radio size={14} /> {t("camera.toggle.streaming")}
+          </button>
+          <button
+            type="button"
+            class="chip chip-btn"
+            class:on={Boolean(status.camera?.lookAtMe)}
+            title={t("camera.toggle.lookAtMeHelp")}
+            onclick={() => toggleCamera("LookAtMe", status.camera?.lookAtMe)}
+          >
+            <Eye size={14} /> {t("camera.toggle.lookAtMe")}
+          </button>
+          <button
+            type="button"
+            class="chip chip-btn"
+            class:on={Boolean(status.camera?.smoothMovement)}
+            title={t("camera.toggle.smoothHelp")}
+            onclick={() => toggleCamera("SmoothMovement", status.camera?.smoothMovement)}
+          >
+            <Waves size={14} /> {t("camera.toggle.smooth")}
+          </button>
+        {/if}
       </div>
 
       <div class="quick-top-actions">
@@ -623,6 +682,70 @@
          ===================================================================== -->
     {:else if activeView === "settings"}
       <div class="settings-stack">
+        <!-- APARIENCIA, TEMA Y SELECTOR PRÉMIUM -->
+        <section class="card theme-settings-card">
+          <div class="theme-header-row">
+            <div>
+              <h3>Apariencia y Sistema de Diseño</h3>
+              <p class="sub">
+                Personaliza la estética global con temas de alta fidelidad (estilo Vercel, Linear y Raycast) y color de acento dinámico.
+              </p>
+            </div>
+            <div class="theme-status-pill">
+              <span class="status-indicator"></span>
+              {themeManager.isDark ? "Modo Oscuro" : "Modo Claro"} · {themeManager.mode === "system" ? "Sistema" : "Manual"}
+            </div>
+          </div>
+
+          <div class="theme-grid">
+            <div class="theme-field">
+              <div class="theme-field-header">
+                <span class="theme-field-title">Tema de la Interfaz</span>
+                <span class="theme-field-sub">Auto-detección con prefers-color-scheme</span>
+              </div>
+              <IrisSelect
+                items={themeModeOptions}
+                value={themeManager.mode}
+                size="md"
+                onchange={(m) => themeManager.setMode(m as ThemeMode)}
+              />
+            </div>
+
+            <div class="theme-field">
+              <div class="theme-field-header">
+                <span class="theme-field-title">Color de Acento de Marca</span>
+                <span class="theme-field-sub">Tokens CSS dinámicos de acento y resplandor</span>
+              </div>
+              <IrisSelect
+                items={accentPresetOptions}
+                value={themeManager.accent}
+                size="md"
+                onchange={(a) => themeManager.setAccent(a as AccentPreset)}
+              />
+            </div>
+          </div>
+
+          <!-- Muestrario de paletas rápidas con swatches interactivos -->
+          <div class="swatches-container">
+            <span class="swatches-label">Paleta rápida de marca:</span>
+            <div class="swatches-row">
+              {#each Object.values(ACCENT_PRESETS) as preset (preset.id)}
+                <button
+                  type="button"
+                  class="swatch-chip"
+                  class:active={themeManager.accent === preset.id}
+                  style="--accent-swatch: {preset.hex}"
+                  title="{preset.name} ({preset.hex})"
+                  onclick={() => themeManager.setAccent(preset.id)}
+                >
+                  <span class="swatch-dot"></span>
+                  <span class="swatch-text">{preset.name}</span>
+                </button>
+              {/each}
+            </div>
+          </div>
+        </section>
+
         <section class="card anchor-row">
           <div>
             <h3>{t("settings.language")}</h3>
@@ -804,6 +927,20 @@
     color: var(--text);
     border-color: var(--accent);
     box-shadow: 0 0 14px rgba(61, 90, 254, 0.22);
+  }
+  .chip-btn {
+    cursor: pointer;
+    font-family: inherit;
+    transition: all 150ms ease;
+  }
+  .chip-btn:hover:not(:disabled) {
+    border-color: var(--lavender);
+    color: var(--text);
+    background: rgba(184, 169, 255, 0.08);
+  }
+  .chip-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
   }
   .quick-top-actions {
     display: flex;
@@ -994,6 +1131,118 @@
     display: flex;
     flex-direction: column;
     gap: 14px;
+  }
+  .theme-settings-card {
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+    background: var(--surface);
+    border: 1px solid var(--select-border);
+    border-radius: var(--radius);
+    padding: 20px;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+  }
+  .theme-header-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+  .theme-status-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    background: var(--select-surface-hover);
+    border: 1px solid var(--select-border);
+    border-radius: 999px;
+    font-size: 0.78rem;
+    font-weight: 500;
+    color: var(--text-2);
+  }
+  .status-indicator {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--accent-color);
+    box-shadow: 0 0 8px var(--accent-glow);
+  }
+  .theme-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 18px;
+  }
+  .theme-field {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .theme-field-header {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .theme-field-title {
+    font-size: 0.88rem;
+    font-weight: 600;
+    color: var(--text);
+  }
+  .theme-field-sub {
+    font-size: 0.76rem;
+    color: var(--text-2);
+  }
+  .swatches-container {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding-top: 14px;
+    border-top: 1px solid var(--select-border);
+  }
+  .swatches-label {
+    font-size: 0.8rem;
+    color: var(--text-2);
+    font-weight: 500;
+  }
+  .swatches-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .swatch-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 5px 12px;
+    background: var(--select-bg);
+    border: 1px solid var(--select-border);
+    border-radius: 999px;
+    cursor: pointer;
+    font-size: 0.8rem;
+    color: var(--text);
+    transition:
+      border-color 160ms var(--ease),
+      background-color 160ms var(--ease),
+      transform 120ms var(--ease);
+  }
+  .swatch-chip:hover {
+    border-color: var(--accent-swatch);
+    background: var(--select-surface-hover);
+  }
+  .swatch-chip.active {
+    border-color: var(--accent-swatch);
+    box-shadow: 0 0 10px rgba(var(--accent-color-rgb), 0.3);
+    font-weight: 600;
+  }
+  .swatch-dot {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: var(--accent-swatch);
+    flex-shrink: 0;
+  }
+  .swatch-chip:active {
+    transform: scale(0.96);
   }
   .anchor-row {
     display: flex;

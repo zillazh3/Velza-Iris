@@ -69,6 +69,7 @@
     type DurationChangeResolution,
   } from "$lib/studio/duration";
   import SpatialViewport from "$lib/studio/SpatialViewport.svelte";
+  import IrisSelect, { type SelectOption } from "$lib/components/ui/IrisSelect.svelte";
 
   let {
     status,
@@ -118,6 +119,40 @@
   let presetMotions = $state<Motion[]>([]);
   let selectedPresetMotion = $state<string>("Órbita 360°");
   let telemetry = $state<TelemetryReport | null>(null);
+
+  const sequenceSelectOptions = $derived<SelectOption[]>([
+    ...sequences.map((s) => ({
+      value: s.id,
+      label: s.name,
+      icon: Film,
+      description: `${s.keyframes.length} puntos · ${s.duration}s`,
+    })),
+    ...(!sequences.some((s) => s.id === activeProject.id)
+      ? [
+          {
+            value: activeProject.id,
+            label: `${activeProject.name} *`,
+            icon: Film,
+            description: "Sin guardar",
+          },
+        ]
+      : []),
+  ]);
+
+  const cinematicProfileOptions: SelectOption[] = [
+    { value: "cinematic", label: "Cinemático", description: "Inercia suave y amortiguada" },
+    { value: "precision", label: "Precisión", description: "Respuesta rígida sin rebote" },
+    { value: "organic", label: "Orgánico", description: "Micro-variaciones sutiles" },
+  ];
+
+  const presetMotionOptions = $derived<SelectOption[]>(
+    presetMotions.map((m) => ({
+      value: m.name,
+      label: m.name,
+      icon: Orbit,
+      description: `${m.duration}s · ${m.loop}`,
+    }))
+  );
 
   // Estado de la sección «Configuración del proyecto»
   let showProjectConfig = $state(false);
@@ -925,12 +960,13 @@
   <!-- BARRA SUPERIOR DE PROYECTO Y SELECTOR [ CAPTURA | EDITOR ] -->
   <header class="studio-topbar card">
     <div class="project-controls">
-      <label class="seq-picker" title="Cambiar entre secuencias guardadas">
-        <FolderOpen size={15} />
-        <select
+      <div class="seq-picker-wrap" title="Cambiar entre secuencias guardadas">
+        <IrisSelect
+          items={sequenceSelectOptions}
           value={activeProject.id}
-          onchange={(e) => {
-            const found = sequences.find((s) => s.id === e.currentTarget.value);
+          size="sm"
+          onchange={(newId) => {
+            const found = sequences.find((s) => s.id === newId);
             if (found) {
               activeProject = structuredClone(found);
               selectedKeyframeId = activeProject.keyframes[0]?.id ?? null;
@@ -940,15 +976,8 @@
               redoStack = [];
             }
           }}
-        >
-          {#each sequences as seq (seq.id)}
-            <option value={seq.id}>{seq.name}</option>
-          {/each}
-          {#if !sequences.some((s) => s.id === activeProject.id)}
-            <option value={activeProject.id}>{activeProject.name} *</option>
-          {/if}
-        </select>
-      </label>
+        />
+      </div>
 
       <input
         class="project-name-input"
@@ -1350,24 +1379,22 @@
         >
           <Sliders size={14} /> {formatSecondsToMmSs(activeProject.duration)}
         </button>
-        <label class="dur-field" title="Perfil del motor cinematográfico (inercia, suavizado y carácter de movimiento)">
-          <span>Perfil</span>
-          <select
+        <div class="dur-select-field" title="Perfil del motor cinematográfico (inercia, suavizado y carácter de movimiento)">
+          <span class="field-label">Perfil</span>
+          <IrisSelect
+            items={cinematicProfileOptions}
             value={activeProject.cinematic?.profile ?? "cinematic"}
-            onchange={(e) => applyCinematicProfile(e.currentTarget.value as CinematicProfile)}
-          >
-            <option value="cinematic">Cinemático</option>
-            <option value="precision">Precisión</option>
-            <option value="organic">Orgánico</option>
-          </select>
-        </label>
+            size="sm"
+            onchange={(val) => applyCinematicProfile(val as CinematicProfile)}
+          />
+        </div>
         {#if presetMotions.length > 0}
-          <div class="dur-field" title="Convierte un movimiento predefinido en una secuencia editable de puntos">
-            <select bind:value={selectedPresetMotion} aria-label="Movimiento predefinido">
-              {#each presetMotions as m (m.name)}
-                <option value={m.name}>{m.name}</option>
-              {/each}
-            </select>
+          <div class="dur-select-field preset-motion-field" title="Convierte un movimiento predefinido en una secuencia editable de puntos">
+            <IrisSelect
+              items={presetMotionOptions}
+              bind:value={selectedPresetMotion}
+              size="sm"
+            />
             <button
               type="button"
               class="ghost sm"
@@ -2753,6 +2780,24 @@
     gap: 8px;
     flex-wrap: wrap;
   }
+  .seq-picker-wrap {
+    min-width: 220px;
+    max-width: 280px;
+  }
+  .dur-select-field {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 150px;
+  }
+  .preset-motion-field {
+    min-width: 280px;
+  }
+  .field-label {
+    font-size: 0.82rem;
+    color: var(--text-2);
+    white-space: nowrap;
+  }
   .seq-picker {
     display: inline-flex;
     align-items: center;
@@ -2762,14 +2807,6 @@
     padding: 5px 10px;
     border-radius: 10px;
     color: var(--lavender);
-  }
-  .seq-picker select {
-    background: transparent;
-    color: var(--text);
-    border: 0;
-    font: inherit;
-    font-size: 0.85rem;
-    outline: none;
   }
   .project-name-input,
   input[type="text"],
