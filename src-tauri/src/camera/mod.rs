@@ -14,11 +14,34 @@ pub enum Change {
     Closed,
 }
 
+/// Eventos estructurados recibidos por OSC desde VRChat para alimentar al gestor de anclaje (`AnchorManager`).
+#[derive(Clone, Debug, PartialEq)]
+pub enum CameraOscEvent {
+    Mode {
+        prev_mode: u8,
+        new_mode: u8,
+        timestamp_ms: u64,
+    },
+    Pose {
+        pose: Pose,
+        seq: u64,
+        timestamp_ms: u64,
+    },
+    LookAtMe {
+        enabled: bool,
+        offsets_xy: Option<[f32; 2]>,
+        timestamp_ms: u64,
+    },
+}
+
 /// Instantánea verificada del estado de cámara para captura de puntos y diagnóstico UI.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CameraSnapshot {
     pub open: bool,
+    /// Modo actual reportado por `/usercamera/Mode` (`0` = Off, `1` = Photo, `2` = Stream, `3..=6` = otros).
+    #[serde(default)]
+    pub mode: u8,
     /// `true` si el puerto UDP 9001 está recibiendo ecos; `false` si opera en modo Control Abierto.
     #[serde(default = "default_true")]
     pub rx_available: bool,
@@ -42,6 +65,7 @@ impl Default for CameraSnapshot {
     fn default() -> Self {
         CameraSnapshot {
             open: false,
+            mode: 0,
             rx_available: true,
             pose: None,
             pose_fresh: false,
@@ -64,6 +88,7 @@ fn default_true() -> bool {
 
 pub struct State {
     pub open: bool,
+    pub mode: u8,
     pub rx_available: bool,
     pub pose: Option<Pose>,
     pub pose_fresh: bool,
@@ -79,6 +104,7 @@ impl Default for State {
     fn default() -> Self {
         State {
             open: false,
+            mode: 0,
             rx_available: true,
             pose: None,
             pose_fresh: false,
@@ -99,7 +125,7 @@ fn values_close_enough(a: Value, b: Value) -> bool {
     }
 }
 
-fn now_epoch_ms() -> u64 {
+pub fn now_epoch_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
@@ -110,43 +136,113 @@ impl State {
     /// `Mode 0` = cerrada, `Mode ≠ 0` = abierta; un `Pose` también implica abierta
     /// (VRChat no lo emite con la cámara cerrada). Devuelve el cambio abierta/cerrada, si lo hubo.
     pub fn apply(&mut self, m: &OscMessage) -> Option<Change> {
-        let name = m.addr.strip_prefix("/usercamera/")?;
-        let open = if name == "Pose" {
-            self.pose = Some(Pose::from_args(&m.args)?);
+        self.apply_with_event(m, now_epoch_ms()).0
+    }
+
+    /// Aplica un mensaje OSC con marca temporal explícita y devuelve tanto el cambio `Opened`/`Closed`
+    /// como el evento tipado `CameraOscEvent` para el gestor de anclaje (`AnchorManager`).
+    pub fn apply_with_event(
+        &mut self,
+        m: &OscMessage,
+        now_ms: u64,
+    ) -> (Option<Change>, Option<CameraOscEvent>) {
+        let Some(name) = m.addr.strip_prefix("/usercamera/") else {
+            return (None, None);
+        };
+        if name == "Pose" {
+            let Some(parsed_pose) = Pose::from_args(&m.args) else {
+                return (None, None);
+            };
+            self.pose = Some(parsed_pose);
             self.pose_fresh = true;
             self.pose_seq = self.pose_seq.wrapping_add(1);
-            self.pose_epoch_ms = Some(now_epoch_ms());
-            true
-        } else {
-            let v = match (kind(name)?, m.args.first()?) {
-                (Kind::Float(..), OscType::Float(f)) if f.is_finite() => Value::F(*f),
-                (Kind::Int(..), OscType::Int(i)) => Value::I(*i),
-                (Kind::Bool | Kind::Trigger, OscType::Bool(b)) => Value::B(*b),
-                _ => return None,
-            };
-            self.values.insert(name.to_string(), v);
-            // Si el usuario cambió un slider en VRChat, actualizamos también last_sent para permitir re-sobrescribirlo
-            self.last_sent.insert(name.to_string(), v);
-            if name != "Mode" {
-                return None;
+            self.pose_epoch_ms = Some(now_ms);
+            if self.mode == 0 {
+                self.mode = 1;
             }
-            let is_open = v != Value::I(0);
-            if !is_open {
-                // Al cerrarse la cámara, la pose anterior deja de ser fresca y limpiamos caché de envíos.
-                self.pose_fresh = false;
+            let was = std::mem::replace(&mut self.open, true);
+            let change = if !was {
                 self.last_sent.clear();
-            }
-            is_open
+                Some(Change::Opened)
+            } else {
+                None
+            };
+            let ev = CameraOscEvent::Pose {
+                pose: parsed_pose,
+                seq: self.pose_seq,
+                timestamp_ms: now_ms,
+            };
+            return (change, Some(ev));
+        }
+
+        let Some(k) = kind(name) else {
+            return (None, None);
         };
-        let was = std::mem::replace(&mut self.open, open);
-        match (was, open) {
+        let Some(first_arg) = m.args.first() else {
+            return (None, None);
+        };
+        let v = match (k, first_arg) {
+            (Kind::Float(..), OscType::Float(f)) if f.is_finite() => Value::F(*f),
+            (Kind::Int(..), OscType::Int(i)) => Value::I(*i),
+            (Kind::Bool | Kind::Trigger, OscType::Bool(b)) => Value::B(*b),
+            _ => return (None, None),
+        };
+        self.values.insert(name.to_string(), v);
+        // Si el usuario cambió un slider en VRChat, actualizamos también last_sent para permitir re-sobrescribirlo
+        self.last_sent.insert(name.to_string(), v);
+
+        if matches!(name, "LookAtMe" | "LookAtMeXOffset" | "LookAtMeYOffset") {
+            let enabled = match self.values.get("LookAtMe") {
+                Some(Value::B(b)) => *b,
+                _ => false,
+            };
+            let x_off = match self.values.get("LookAtMeXOffset") {
+                Some(Value::F(f)) => *f,
+                _ => 0.0,
+            };
+            let y_off = match self.values.get("LookAtMeYOffset") {
+                Some(Value::F(f)) => *f,
+                _ => 0.0,
+            };
+            let ev = CameraOscEvent::LookAtMe {
+                enabled,
+                offsets_xy: Some([x_off, y_off]),
+                timestamp_ms: now_ms,
+            };
+            return (None, Some(ev));
+        }
+
+        if name != "Mode" {
+            return (None, None);
+        }
+
+        let Value::I(raw_mode) = v else {
+            return (None, None);
+        };
+        let prev_mode = self.mode;
+        let new_mode = raw_mode.clamp(0, 6) as u8;
+        self.mode = new_mode;
+        let is_open = new_mode != 0;
+        if !is_open {
+            // Al cerrarse la cámara, la pose anterior deja de ser fresca y limpiamos caché de envíos.
+            self.pose_fresh = false;
+            self.last_sent.clear();
+        }
+        let was = std::mem::replace(&mut self.open, is_open);
+        let change = match (was, is_open) {
             (false, true) => {
                 self.last_sent.clear();
                 Some(Change::Opened)
             }
             (true, false) => Some(Change::Closed),
             _ => None,
-        }
+        };
+        let ev = CameraOscEvent::Mode {
+            prev_mode,
+            new_mode,
+            timestamp_ms: now_ms,
+        };
+        (change, Some(ev))
     }
 
     pub fn snapshot(&self) -> CameraSnapshot {
@@ -160,6 +256,7 @@ impl State {
         };
         CameraSnapshot {
             open: self.open,
+            mode: self.mode,
             rx_available: self.rx_available,
             pose: self.pose,
             pose_fresh: self.pose_fresh,
@@ -213,7 +310,9 @@ pub const DEFAULTS: &[(&str, Value)] = &[
     ("Lightness", Value::F(50.0)),
     ("LookAtMeXOffset", Value::F(0.0)),
     ("LookAtMeYOffset", Value::F(0.0)),
-    ("FlySpeed", Value::F(3.0)),
+    // En VRChat (/usercamera/FlySpeed, ver docs/oscquery-usercamera.json), 0.2 corresponde al factor
+    // por defecto 3.0 en la UI (3.0 / 15.0 = 0.2); enviar 3.0 satura el slider en 15.0.
+    ("FlySpeed", Value::F(0.2)),
     ("TurnSpeed", Value::F(1.0)),
     ("SmoothingStrength", Value::F(5.0)),
     ("PhotoRate", Value::F(1.0)),
@@ -241,11 +340,26 @@ pub struct Camera {
 impl Camera {
     /// `on_change` corre en el hilo de recepción: úsalo para reaplicar el preset al abrirse.
     pub fn start(target: SocketAddr, on_change: impl Fn(Change) + Send + 'static) -> Result<Camera, String> {
+        Self::start_with_events(target, move |change, _ev| {
+            if let Some(c) = change {
+                on_change(c);
+            }
+        })
+    }
+
+    /// Inicia el cliente y escucha OSC invocando `on_event(change, osc_event)` por cada mensaje relevante.
+    pub fn start_with_events(
+        target: SocketAddr,
+        on_event: impl Fn(Option<Change>, Option<CameraOscEvent>) + Send + 'static,
+    ) -> Result<Camera, String> {
         let state = Arc::new(Mutex::new(State::default()));
         let s = state.clone();
         let osc = Osc::start(target, move |m| {
-            let change = s.lock().unwrap().apply(&m);
-            change.into_iter().for_each(&on_change);
+            let now_ms = now_epoch_ms();
+            let (change, ev) = s.lock().unwrap().apply_with_event(&m, now_ms);
+            if change.is_some() || ev.is_some() {
+                on_event(change, ev);
+            }
         })?;
         {
             let mut st = state.lock().unwrap();
@@ -369,5 +483,32 @@ mod tests {
         assert_eq!(s.snapshot().look_at_me, Some(true));
         assert_eq!(s.snapshot().streaming, Some(false));
         assert_eq!(s.snapshot().smooth_movement, Some(true));
+    }
+
+    #[test]
+    fn emits_structured_camera_osc_events_for_mode_pose_and_look_at_me() {
+        let mut s = State::default();
+        let (ch1, ev1) = s.apply_with_event(&msg("Mode", vec![OscType::Int(2)]), 1000);
+        assert_eq!(ch1, Some(Change::Opened));
+        assert_eq!(
+            ev1,
+            Some(CameraOscEvent::Mode {
+                prev_mode: 0,
+                new_mode: 2,
+                timestamp_ms: 1000
+            })
+        );
+        assert_eq!(s.snapshot().mode, 2);
+
+        let (ch2, ev2) = s.apply_with_event(&msg("LookAtMe", vec![OscType::Bool(true)]), 1010);
+        assert_eq!(ch2, None);
+        assert_eq!(
+            ev2,
+            Some(CameraOscEvent::LookAtMe {
+                enabled: true,
+                offsets_xy: Some([0.0, 0.0]),
+                timestamp_ms: 1010
+            })
+        );
     }
 }
