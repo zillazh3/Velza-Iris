@@ -26,7 +26,9 @@
   let orbitYaw = $state(-32);
   let orbitPitch = $state(26);
   let zoomScale = $state(1);
+  let panOffset = $state<[number, number]>([0, 0]);
   let dragging = $state(false);
+  let panning = $state(false);
   let lastMouse = $state<[number, number]>([0, 0]);
 
   let draggingNodeId = $state<string | null>(null);
@@ -44,11 +46,32 @@
   // Calcula el centro y radio del bounding box espacial para auto-encuadrar la trayectoria
   const bounds = $derived.by(() => {
     const pts: [number, number, number][] = [];
+    let hasTrajectoryReference = false;
     if (preview) {
-      for (const n of preview.nodes) pts.push(n.worldPos);
-      for (const p of preview.finalPath) pts.push(p);
-      if (preview.anchorPos) pts.push(preview.anchorPos);
-      if (preview.targetPos) pts.push(preview.targetPos);
+      for (const n of preview.nodes) {
+        pts.push(n.worldPos);
+        hasTrajectoryReference = true;
+      }
+      for (const p of preview.finalPath) {
+        pts.push(p);
+        hasTrajectoryReference = true;
+      }
+      if (preview.anchorPos) {
+        pts.push(preview.anchorPos);
+        hasTrajectoryReference = true;
+      }
+      if (preview.targetPos) {
+        pts.push(preview.targetPos);
+        hasTrajectoryReference = true;
+      }
+    }
+    // Si no hay nodos fijos en la trayectoria, establecer un marco de referencia estable
+    // alrededor del ancla calibrada o del origen para que la cámara pueda desplazarse libremente
+    // por la grilla sin auto-centrarse en su propia posición en cada frame
+    if (!hasTrajectoryReference) {
+      const anchorEye = preview?.anchorPos ?? [0, 1.6, 0];
+      pts.push([anchorEye[0] - 1.5, anchorEye[1] - 0.6, anchorEye[2] - 1.5]);
+      pts.push([anchorEye[0] + 1.5, anchorEye[1] + 0.9, anchorEye[2] + 1.5]);
     }
     if (liveCameraPose) pts.push(liveCameraPose.pos);
     if (pts.length === 0) {
@@ -83,10 +106,10 @@
     const dz = pt[2] - cz;
 
     if (viewMode === "top") {
-      return { x: W / 2 + dx * scale, y: H / 2 - dz * scale, depth: -dy };
+      return { x: W / 2 + dx * scale + panOffset[0], y: H / 2 - dz * scale + panOffset[1], depth: -dy };
     }
     if (viewMode === "side") {
-      return { x: W / 2 + dz * scale, y: H / 2 - dy * scale, depth: dx };
+      return { x: W / 2 + dz * scale + panOffset[0], y: H / 2 - dy * scale + panOffset[1], depth: dx };
     }
 
     const yawRad = (orbitYaw * Math.PI) / 180;
@@ -102,8 +125,8 @@
     const depth = dy * sinP + rz * cosP;
 
     return {
-      x: W / 2 + rx * scale,
-      y: H / 2 - ry * scale,
+      x: W / 2 + rx * scale + panOffset[0],
+      y: H / 2 - ry * scale + panOffset[1],
       depth,
     };
   }
@@ -163,9 +186,22 @@
 
   function onPointerDown(e: PointerEvent) {
     if (draggingNodeId) return;
-    if (viewMode !== "orbit") return;
+    // Paneo con botón central (1), botón derecho (2) o botón primario con Shift
+    if (e.button === 1 || e.button === 2 || (e.button === 0 && e.shiftKey)) {
+      e.preventDefault();
+      panning = true;
+      lastMouse = [e.clientX, e.clientY];
+      if (svgEl) {
+        const rect = svgEl.getBoundingClientRect();
+        dragSvgScale = [rect.width > 0 ? rect.width / W : 1, rect.height > 0 ? rect.height / H : 1];
+      }
+      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+      return;
+    }
+    if (viewMode !== "orbit" || e.button !== 0) return;
     dragging = true;
     lastMouse = [e.clientX, e.clientY];
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
   }
 
   function onPointerMove(e: PointerEvent) {
@@ -210,6 +246,16 @@
       return;
     }
 
+    if (panning) {
+      const dxClient = e.clientX - lastMouse[0];
+      const dyClient = e.clientY - lastMouse[1];
+      lastMouse = [e.clientX, e.clientY];
+      const sx = dragSvgScale[0] > 0 ? dragSvgScale[0] : 1;
+      const sy = dragSvgScale[1] > 0 ? dragSvgScale[1] : 1;
+      panOffset = [panOffset[0] + dxClient / sx, panOffset[1] + dyClient / sy];
+      return;
+    }
+
     if (!dragging || viewMode !== "orbit") return;
     const dx = e.clientX - lastMouse[0];
     const dy = e.clientY - lastMouse[1];
@@ -220,6 +266,7 @@
 
   function onPointerUp() {
     dragging = false;
+    panning = false;
     draggingNodeId = null;
     draggingNodePos = null;
     dragOriginWorld = null;
@@ -230,6 +277,7 @@
     orbitYaw = -32;
     orbitPitch = 26;
     zoomScale = 1;
+    panOffset = [0, 0];
   }
 </script>
 
@@ -272,15 +320,39 @@
     bind:this={svgEl}
     viewBox="0 0 {W} {H}"
     class="vp-svg"
+    class:panning
     role="img"
     aria-label={t("studio.viewportTitle")}
     onpointerdown={onPointerDown}
     onpointermove={onPointerMove}
     onpointerup={onPointerUp}
     onpointerleave={onPointerUp}
+    oncontextmenu={(e) => e.preventDefault()}
     onwheel={(e) => {
       e.preventDefault();
-      zoomScale = Math.max(0.5, Math.min(2.8, zoomScale * (e.deltaY < 0 ? 1.1 : 0.9)));
+      const zoomFactor = e.deltaY < 0 ? 1.15 : 0.87;
+      const prevScale = zoomScale;
+      const newScale = Math.max(0.4, Math.min(4.5, zoomScale * zoomFactor));
+      if (Math.abs(newScale - prevScale) < 1e-4) return;
+      const kEff = newScale / prevScale;
+
+      // Medir coordenadas SVG del cursor para centrar el zoom en el punto bajo el ratón
+      let mx = W / 2;
+      let my = H / 2;
+      if (svgEl) {
+        const rect = svgEl.getBoundingClientRect();
+        if (rect.width > 0 && rect.height > 0) {
+          mx = ((e.clientX - rect.left) / rect.width) * W;
+          my = ((e.clientY - rect.top) / rect.height) * H;
+        }
+      }
+
+      // Desplazar panOffset para mantener invariante la posición espacial bajo el cursor
+      panOffset = [
+        (mx - W / 2) * (1 - kEff) + panOffset[0] * kEff,
+        (my - H / 2) * (1 - kEff) + panOffset[1] * kEff,
+      ];
+      zoomScale = newScale;
     }}
   >
     <defs>
