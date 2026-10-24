@@ -29,6 +29,15 @@
     Video,
     Wand2,
     ZoomIn,
+    ChevronDown,
+    ChevronRight,
+    ChevronLeft,
+    Clock,
+    FastForward,
+    Keyboard,
+    Rewind,
+    SkipBack,
+    SkipForward,
   } from "@lucide/svelte";
   import {
     api,
@@ -50,8 +59,8 @@
     type TrajectoryPreview,
     type Transition,
   } from "$lib/api";
-  import { t, type Key } from "$lib/i18n/index.svelte";
-  import { createEffectClip, EFFECT_CATALOG, type EffectCategory } from "$lib/studio/catalog";
+  import { t, pointLabel, localizeError, localizeMotionName, type Key } from "$lib/i18n/index.svelte";
+  import { createEffectClip, EFFECT_CATALOG, getEffectDesc, getEffectParamALabel, getEffectParamBLabel, type EffectCategory } from "$lib/studio/catalog";
   import {
     adaptiveSnapStep,
     applyProjectDurationChange,
@@ -70,6 +79,12 @@
   } from "$lib/studio/duration";
   import SpatialViewport from "$lib/studio/SpatialViewport.svelte";
   import IrisSelect, { type SelectOption } from "$lib/components/ui/IrisSelect.svelte";
+  import IrisCheckbox from "$lib/components/ui/IrisCheckbox.svelte";
+  import IrisContextMenu, { type ContextMenuItem } from "$lib/components/ui/IrisContextMenu.svelte";
+  import CurveEditorModal, { type BezierCurve } from "$lib/components/ui/CurveEditorModal.svelte";
+  import KeybindingsModal from "$lib/components/ui/KeybindingsModal.svelte";
+  import KeyframeQuickEditor from "$lib/studio/KeyframeQuickEditor.svelte";
+  import { shortcutManager } from "$lib/shortcuts/shortcuts.svelte";
 
   let {
     status,
@@ -95,6 +110,13 @@
   // Historial Undo / Redo sobre SequenceProject
   let undoStack = $state<string[]>([]);
   let redoStack = $state<string[]>([]);
+
+  // Portapapeles interno del Studio (Keyframes y Efectos)
+  let studioClipboard = $state<
+    | { type: "keyframe"; data: Keyframe }
+    | { type: "effect"; data: EffectClip }
+    | null
+  >(null);
 
   // Evaluación matemática y vista previa espacial 3D
   let evaluatedFrame = $state<EvaluatedFrame | null>(null);
@@ -125,7 +147,7 @@
       value: s.id,
       label: s.name,
       icon: Film,
-      description: `${s.keyframes.length} puntos · ${s.duration}s`,
+      description: `${s.keyframes.length} ${t("library.pointsCount", { count: s.keyframes.length })} · ${s.duration}s`,
     })),
     ...(!sequences.some((s) => s.id === activeProject.id)
       ? [
@@ -133,26 +155,100 @@
             value: activeProject.id,
             label: `${activeProject.name} *`,
             icon: Film,
-            description: "Sin guardar",
+            description: t("studio.unsaved"),
           },
         ]
       : []),
   ]);
 
-  const cinematicProfileOptions: SelectOption[] = [
-    { value: "cinematic", label: "Cinemático", description: "Inercia suave y amortiguada" },
-    { value: "precision", label: "Precisión", description: "Respuesta rígida sin rebote" },
-    { value: "organic", label: "Orgánico", description: "Micro-variaciones sutiles" },
-  ];
+  const cinematicProfileOptions = $derived<SelectOption[]>([
+    { value: "cinematic", label: t("studio.profile.cinematic"), description: t("studio.profile.cinematicDesc") },
+    { value: "precision", label: t("studio.profile.precision"), description: t("studio.profile.precisionDesc") },
+    { value: "organic", label: t("studio.profile.organic"), description: t("studio.profile.organicDesc") },
+  ]);
 
   const presetMotionOptions = $derived<SelectOption[]>(
     presetMotions.map((m) => ({
       value: m.name,
-      label: m.name,
+      label: localizeMotionName(m.name),
       icon: Orbit,
-      description: `${m.duration}s · ${m.loop}`,
+      description: `${m.duration}s · ${t(`motion.loop.${m.loop}` as Key)}`,
     }))
   );
+
+  const configUnitOptions = $derived<SelectOption<DurationUnit>[]>([
+    { value: "seconds", label: `${t("studio.config.unitSeconds")} (s)` },
+    { value: "minutes", label: `${t("studio.config.unitMinutes")} (min)` },
+  ]);
+
+  const transitionOptions = $derived<SelectOption<Transition>[]>([
+    { value: "linear", label: `${t("studio.trans.linear")} — Linear` },
+    { value: "smooth", label: `${t("studio.trans.smooth")} — Cosine In-Out` },
+    { value: "slowIn", label: `${t("studio.trans.slowIn")} — Cubic Ease-In` },
+    { value: "slowOut", label: `${t("studio.trans.slowOut")} — Cubic Ease-Out` },
+    { value: "smoothInOut", label: `${t("studio.trans.smoothInOut")} — Cubic S-Curve` },
+  ]);
+
+  const knotModeOptions = $derived<SelectOption<"passThrough" | "stop">[]>([
+    { value: "passThrough", label: t("studio.knotMode.passThrough") },
+    { value: "stop", label: t("studio.knotMode.stop") },
+  ]);
+
+  const fxTrackOptions = $derived<SelectOption<string>[]>([
+    { value: "0", label: t("studio.trackFx1") },
+    { value: "1", label: t("studio.trackFx2") },
+    { value: "2", label: t("studio.trackFx3") },
+  ]);
+
+  const referenceSpaceOptions = $derived<SelectOption<"anchor" | "world">[]>([
+    { value: "anchor", label: t("library.spaceAnchor") },
+    { value: "world", label: t("library.spaceWorld") },
+  ]);
+
+  const targetSourceOptions = $derived<SelectOption<string>[]>([
+    { value: "calibratedAnchor", label: "Ojos del jugador (Ancla)" },
+    { value: "staticCalibratedPoint", label: "Punto 3D Estático" },
+    { value: "manualReference", label: t("studio.targetSource.manual") },
+  ]);
+
+  const quickEffectKindOptions = $derived<SelectOption<EffectKind>[]>(
+    EFFECT_CATALOG.map((item) => ({
+      value: item.kind,
+      label: t(item.labelKey),
+      description: t(item.descKey),
+    }))
+  );
+
+  // Estados de Modales y Menús Interactivos Modernos
+  let showKeybindingsModal = $state(false);
+  let showCurveEditorModal = $state(false);
+  let curveEditorTarget = $state<{ type: "keyframe" | "effect"; id: string; curve: BezierCurve } | null>(null);
+  let quickEditorState = $state<{ open: boolean; keyframe: Keyframe | null; x: number; y: number }>({
+    open: false,
+    keyframe: null,
+    x: 0,
+    y: 0,
+  });
+  let contextMenu = $state<{
+    open: boolean;
+    x: number;
+    y: number;
+    items: ContextMenuItem[];
+  }>({
+    open: false,
+    x: 0,
+    y: 0,
+    items: [],
+  });
+  let draggingLibraryEffect = $state<{ kind: EffectKind; x: number; y: number } | null>(null);
+  let hoveredFxTrack = $state<number | null>(null);
+  let fxLaneEls = $state<(HTMLElement | null)[]>([null, null, null]);
+  let inspectorAccordion = $state({
+    pos: true,
+    rot: true,
+    optics: true,
+    space: true,
+  });
 
   // Estado de la sección «Configuración del proyecto»
   let showProjectConfig = $state(false);
@@ -284,6 +380,7 @@
   let dragState = $state<
     | { kind: "playhead" }
     | { kind: "keyframe"; id: string }
+    | { kind: "keyframe-stretch"; id: string; nextId: string; origNextTime: number }
     | { kind: "effect-move"; id: string; offsetSec: number }
     | { kind: "effect-resize"; id: string }
     | null
@@ -322,7 +419,7 @@
       const q = librarySearch.toLowerCase();
       return (
         t(item.labelKey).toLowerCase().includes(q) ||
-        item.shortDesc.toLowerCase().includes(q) ||
+        getEffectDesc(item).toLowerCase().includes(q) ||
         item.kind.toLowerCase().includes(q)
       );
     }),
@@ -351,11 +448,6 @@
     undoStack = [...undoStack, JSON.stringify(activeProject)];
     activeProject = JSON.parse(next);
     refreshMathPreview(false);
-  }
-
-  function pointLabel(idx: number): string {
-    const letter = String.fromCharCode(65 + (idx % 26));
-    return idx < 26 ? `Punto ${letter}` : `Punto ${letter}${Math.floor(idx / 26) + 1}`;
   }
 
   function snapTime(sec: number): number {
@@ -451,7 +543,7 @@
       selectedEffectId = null;
       playheadTime = kf.time;
       await refreshMathPreview(false);
-    }, `${pointLabel(nextIdx)} capturado desde la cámara de VRChat (${targetTime.toFixed(1)} s).`);
+    }, t("toast.pointCaptured", { label: pointLabel(nextIdx), time: targetTime.toFixed(1) }));
   }
 
   async function handleCaptureButton() {
@@ -524,7 +616,7 @@
       };
       activeProject = { ...activeProject };
       await refreshMathPreview(false);
-    }, `${selectedKeyframe.label} actualizado con la posición actual de VRChat.`);
+    }, t("toast.pointUpdated", { label: selectedKeyframe.label }));
   }
 
   function duplicateSelectedKeyframe() {
@@ -666,13 +758,14 @@
     requestDurationChange(parsedConfigDuration.seconds);
   }
 
-  function addEffectToTimeline(kind: EffectKind, preferredTrack?: number) {
+  function addEffectToTimeline(kind: EffectKind, customStartTime?: number, preferredTrack?: number) {
     pushUndoSnapshot();
     const entry = EFFECT_CATALOG.find((e) => e.kind === kind);
     const defaultTrack =
       preferredTrack ??
       (entry?.category === "optics" ? 0 : entry?.category === "movement" ? 0 : 1);
-    const clip = createEffectClip(kind, playheadTime, activeProject.duration, defaultTrack);
+    const start = customStartTime !== undefined ? customStartTime : playheadTime;
+    const clip = createEffectClip(kind, start, activeProject.duration, defaultTrack);
     activeProject = {
       ...activeProject,
       effects: [...activeProject.effects, clip],
@@ -684,6 +777,257 @@
     selectedKeyframeId = null;
     inspectorTab = "selection";
     void refreshMathPreview(liveScrub);
+  }
+
+  function updateKeyframePos(id: string, newPos: [number, number, number]) {
+    const kf = activeProject.keyframes.find((k) => k.id === id);
+    if (!kf) return;
+    kf.rawPose.pos = [newPos[0], newPos[1], newPos[2]];
+    if (activeProject.space === "anchor" && activeProject.anchorSnapshot) {
+      const [ax, ay, az] = activeProject.anchorSnapshot.eye;
+      kf.localPose = {
+        pos: [newPos[0] - ax, newPos[1] - ay, newPos[2] - az],
+        rot: [...kf.rawPose.rot],
+      };
+    }
+    void refreshMathPreview(false);
+  }
+
+  function openKeyframeContextMenu(kf: Keyframe, e: MouseEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    selectedKeyframeId = kf.id;
+    selectedEffectId = null;
+    inspectorTab = "selection";
+    contextMenu = {
+      open: true,
+      x: e.clientX,
+      y: e.clientY,
+      items: [
+        {
+          label: `${t("studio.ctx.editProps")} (${kf.label})`,
+          icon: Sliders,
+          action: () => {
+            quickEditorState = { open: true, keyframe: kf, x: e.clientX, y: e.clientY };
+          },
+        },
+        {
+          label: t("studio.ctx.customCurve"),
+          icon: Sparkles,
+          action: () => {
+            curveEditorTarget = {
+              type: "keyframe",
+              id: kf.id,
+              curve: (kf as any).customCurve ?? [0.4, 0.0, 0.2, 1.0],
+            };
+            showCurveEditorModal = true;
+          },
+        },
+        {
+          label: t("studio.ctx.updatePose"),
+          icon: Camera,
+          disabled: !status.connected || !status.open,
+          action: updateSelectedKeyframeFromCamera,
+        },
+        {
+          label: t("menu.copyPoint"),
+          icon: Copy,
+          shortcut: "Ctrl+C",
+          action: copySelected,
+        },
+        {
+          label: t("menu.paste"),
+          icon: FolderOpen,
+          shortcut: "Ctrl+V",
+          disabled: !studioClipboard,
+          action: pasteSelected,
+        },
+        {
+          label: t("studio.ctx.duplicate"),
+          icon: Copy,
+          shortcut: "Ctrl+D",
+          action: duplicateSelectedKeyframe,
+        },
+        { separator: true },
+        {
+          label: t("studio.ctx.delete"),
+          icon: Trash2,
+          shortcut: "Delete",
+          danger: true,
+          action: deleteSelectedKeyframe,
+        },
+      ],
+    };
+  }
+
+  function openEffectContextMenu(ef: EffectClip, e: MouseEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    selectedEffectId = ef.id;
+    selectedKeyframeId = null;
+    inspectorTab = "selection";
+    const entry = EFFECT_CATALOG.find((c) => c.kind === ef.kind);
+    contextMenu = {
+      open: true,
+      x: e.clientX,
+      y: e.clientY,
+      items: [
+        {
+          label: `${entry ? t(entry.labelKey) : ef.kind} (${ef.enabled ? "Desactivar" : "Activar"})`,
+          icon: Sparkles,
+          action: () => {
+            ef.enabled = !ef.enabled;
+            void refreshMathPreview(false);
+          },
+        },
+        {
+          label: t("studio.ctx.customCurve"),
+          icon: Sparkles,
+          action: () => {
+            curveEditorTarget = {
+              type: "effect",
+              id: ef.id,
+              curve: (ef as any).customCurve ?? [0.4, 0.0, 0.2, 1.0],
+            };
+            showCurveEditorModal = true;
+          },
+        },
+        {
+          label: `${t("studio.ctx.moveToTrack")} 1`,
+          action: () => {
+            ef.track = 0;
+            void refreshMathPreview(false);
+          },
+        },
+        {
+          label: `${t("studio.ctx.moveToTrack")} 2`,
+          action: () => {
+            ef.track = 1;
+            void refreshMathPreview(false);
+          },
+        },
+        {
+          label: `${t("studio.ctx.moveToTrack")} 3`,
+          action: () => {
+            ef.track = 2;
+            void refreshMathPreview(false);
+          },
+        },
+        {
+          label: t("menu.copyEffect"),
+          icon: Copy,
+          shortcut: "Ctrl+C",
+          action: copySelected,
+        },
+        {
+          label: t("menu.paste"),
+          icon: FolderOpen,
+          shortcut: "Ctrl+V",
+          disabled: !studioClipboard,
+          action: pasteSelected,
+        },
+        {
+          label: t("studio.ctx.duplicate"),
+          icon: Copy,
+          shortcut: "Ctrl+D",
+          action: duplicateSelectedEffect,
+        },
+        { separator: true },
+        {
+          label: t("studio.ctx.delete"),
+          icon: Trash2,
+          shortcut: "Delete",
+          danger: true,
+          action: deleteSelectedEffect,
+        },
+      ],
+    };
+  }
+
+  function openTimelineContextMenu(e: MouseEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    const clickTime = snapTime(timeFromPointer(e.clientX));
+    contextMenu = {
+      open: true,
+      x: e.clientX,
+      y: e.clientY,
+      items: [
+        {
+          label: `${t("studio.ctx.addKfHere")} (${clickTime.toFixed(1)}s)`,
+          icon: Camera,
+          disabled: !status.connected || !status.open,
+          action: () => {
+            playheadTime = clickTime;
+            void executeCaptureFromCamera();
+          },
+        },
+        {
+          label: `${t("menu.pasteHere")} (${clickTime.toFixed(1)}s)`,
+          icon: FolderOpen,
+          shortcut: "Ctrl+V",
+          disabled: !studioClipboard,
+          action: () => {
+            playheadTime = clickTime;
+            pasteSelected();
+          },
+        },
+        {
+          label: `${t("studio.ctx.addEffectHere")} (Smooth Zoom)`,
+          icon: Sparkles,
+          action: () => {
+            addEffectToTimeline("smoothZoom", clickTime, 0);
+          },
+        },
+        {
+          label: `${t("studio.ctx.addEffectHere")} (Camera Drift)`,
+          icon: Sparkles,
+          action: () => {
+            addEffectToTimeline("cameraDrift", clickTime, 1);
+          },
+        },
+      ],
+    };
+  }
+
+  function handleCustomCurveSaved(curve: BezierCurve) {
+    if (!curveEditorTarget) return;
+    if (curveEditorTarget.type === "keyframe") {
+      const kf = activeProject.keyframes.find((k) => k.id === curveEditorTarget?.id);
+      if (kf) {
+        (kf as any).customCurve = curve;
+      }
+    } else if (curveEditorTarget.type === "effect") {
+      const ef = activeProject.effects.find((e) => e.id === curveEditorTarget?.id);
+      if (ef) {
+        (ef as any).customCurve = curve;
+      }
+    }
+    void refreshMathPreview(false);
+  }
+
+  function openCurveEditorForKeyframe(kf: Keyframe) {
+    curveEditorTarget = {
+      type: "keyframe",
+      id: kf.id,
+      curve: (kf as any).customCurve ?? [0.4, 0.0, 0.2, 1.0],
+    };
+    showCurveEditorModal = true;
+  }
+
+  function openCurveEditorForEffect(ef: EffectClip) {
+    curveEditorTarget = {
+      type: "effect",
+      id: ef.id,
+      curve: (ef as any).customCurve ?? [0.4, 0.0, 0.2, 1.0],
+    };
+    showCurveEditorModal = true;
+  }
+
+  function onLibraryItemPointerDown(kind: EffectKind, e: PointerEvent) {
+    e.stopPropagation();
+    document.body.classList.add("timeline-dragging");
+    draggingLibraryEffect = { kind, x: e.clientX, y: e.clientY };
   }
 
   function duplicateSelectedEffect() {
@@ -717,12 +1061,132 @@
     void refreshMathPreview(false);
   }
 
+  function copySelected() {
+    if (selectedKeyframe) {
+      studioClipboard = {
+        type: "keyframe",
+        data: structuredClone($state.snapshot(selectedKeyframe)),
+      };
+      void run(async () => {}, t("toast.keyframeCopied", { label: selectedKeyframe.label }));
+    } else if (selectedEffect) {
+      const cat = EFFECT_CATALOG.find((c) => c.kind === selectedEffect.kind);
+      const name = cat ? t(cat.labelKey) : selectedEffect.kind;
+      studioClipboard = {
+        type: "effect",
+        data: structuredClone($state.snapshot(selectedEffect)),
+      };
+      void run(async () => {}, t("toast.effectCopied", { name }));
+    }
+  }
+
+  function pasteSelected() {
+    if (!studioClipboard) return;
+    pushUndoSnapshot();
+
+    if (studioClipboard.type === "keyframe") {
+      const src = studioClipboard.data;
+      let pasteTime = Math.round(playheadTime * 100) / 100;
+      if (Math.abs(pasteTime - src.time) < 0.05) {
+        pasteTime = Math.min(activeProject.duration, Math.round((src.time + 1.0) * 100) / 100);
+      }
+      const newId = `kf-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+      const nextIdx = activeProject.keyframes.length;
+      const copy: Keyframe = {
+        ...structuredClone(src),
+        id: newId,
+        label: pointLabel(nextIdx),
+        time: pasteTime,
+      };
+      activeProject.keyframes = [...activeProject.keyframes, copy].sort((a, b) => a.time - b.time);
+      selectedKeyframeId = copy.id;
+      selectedEffectId = null;
+      playheadTime = copy.time;
+      void refreshMathPreview(false);
+      void run(async () => {}, t("toast.keyframePasted", { label: copy.label, time: copy.time.toFixed(1) }));
+    } else if (studioClipboard.type === "effect") {
+      const src = studioClipboard.data;
+      let pasteStart = Math.round(playheadTime * 100) / 100;
+      if (Math.abs(pasteStart - src.startTime) < 0.05) {
+        pasteStart = Math.min(
+          Math.max(0, activeProject.duration - src.duration),
+          Math.round((src.startTime + 0.5) * 100) / 100
+        );
+      }
+      const newId = `ef-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+      const copy: EffectClip = {
+        ...structuredClone(src),
+        id: newId,
+        startTime: pasteStart,
+      };
+      activeProject = {
+        ...activeProject,
+        effects: [...activeProject.effects, copy],
+      };
+      selectedEffectId = copy.id;
+      selectedKeyframeId = null;
+      void refreshMathPreview(false);
+      const cat = EFFECT_CATALOG.find((c) => c.kind === copy.kind);
+      const name = cat ? t(cat.labelKey) : copy.kind;
+      void run(async () => {}, t("toast.effectPasted", { name, time: copy.startTime.toFixed(1) }));
+    }
+  }
+
+  function duplicateSelected() {
+    if (selectedKeyframeId) {
+      duplicateSelectedKeyframe();
+    } else if (selectedEffectId) {
+      duplicateSelectedEffect();
+    }
+  }
+
+  // Controles de transporte y navegación temporal
+  function jumpToStart() {
+    playheadTime = 0;
+    void refreshMathPreview(liveScrub);
+  }
+
+  function jumpToEnd() {
+    playheadTime = activeProject.duration;
+    void refreshMathPreview(liveScrub);
+  }
+
+  function stepTime(deltaSec: number) {
+    playheadTime = Math.max(0, Math.min(activeProject.duration, Math.round((playheadTime + deltaSec) * 100) / 100));
+    void refreshMathPreview(liveScrub);
+  }
+
+  function jumpToPrevKeyframe() {
+    const sorted = [...activeProject.keyframes].sort((a, b) => a.time - b.time);
+    const prev = sorted.filter((k) => k.time < playheadTime - 0.05).pop();
+    if (prev) {
+      playheadTime = prev.time;
+      selectedKeyframeId = prev.id;
+      selectedEffectId = null;
+    } else {
+      playheadTime = 0;
+    }
+    void refreshMathPreview(liveScrub);
+  }
+
+  function jumpToNextKeyframe() {
+    const sorted = [...activeProject.keyframes].sort((a, b) => a.time - b.time);
+    const next = sorted.find((k) => k.time > playheadTime + 0.05);
+    if (next) {
+      playheadTime = next.time;
+      selectedKeyframeId = next.id;
+      selectedEffectId = null;
+    } else {
+      playheadTime = activeProject.duration;
+    }
+    void refreshMathPreview(liveScrub);
+  }
+
   function createNewProject() {
     pushUndoSnapshot();
     activeProject = {
       schemaVersion: 2,
       id: `seq-${Date.now()}`,
-      name: "Nueva secuencia cinematográfica",
+      name: t("default.newProjectName"),
       duration: DEFAULT_DURATION_SEC,
       durationUnit: "seconds",
       durationInputMode: "valueUnit",
@@ -754,7 +1218,12 @@
 
   // Reproducción Vista Previa vs En Vivo (VRChat OSC)
   async function startPlayback(liveOsc: boolean) {
-    const startAt = playheadTime >= activeProject.duration - 0.05 ? 0 : playheadTime;
+    const isAtEnd = playheadTime >= activeProject.duration - 0.25;
+    if (isAtEnd) {
+      playheadTime = 0;
+      void refreshMathPreview(false);
+    }
+    const startAt = playheadTime;
     await run(async () => {
       await api.playSequence(activeProject, startAt, playbackStatus.looping, liveOsc);
     });
@@ -782,7 +1251,7 @@
         selectedKeyframeId = res.keyframes[0]?.id ?? null;
         playheadTime = 0;
         await refreshMathPreview(false);
-      }, "Recorrido grabado y convertido en puntos editables.");
+      }, t("toast.recordingSaved"));
     }
   }
 
@@ -802,7 +1271,7 @@
       };
       selectedKeyframeId = kfs[0]?.id ?? null;
       await refreshMathPreview(false);
-    }, `Trayectoria simplificada a ${activeProject.keyframes.length} puntos sin alterar las muestras originales.`);
+    }, t("toast.simplified", { count: activeProject.keyframes.length }));
   }
 
   function bindCurrentAnchorToProject() {
@@ -850,7 +1319,7 @@
         target: tg,
       };
       await refreshMathPreview(false);
-    }, "Objetivo de seguimiento capturado desde la posición actual de la cámara.");
+    }, t("toast.targetCaptured"));
   }
 
   // Interacción con el timeline (arrastrar cursor, keyframes y clips)
@@ -862,6 +1331,22 @@
   }
 
   function onTimelinePointerMove(e: PointerEvent) {
+    if (draggingLibraryEffect) {
+      draggingLibraryEffect.x = e.clientX;
+      draggingLibraryEffect.y = e.clientY;
+      for (let tIdx = 0; tIdx < 3; tIdx++) {
+        const laneEl = fxLaneEls[tIdx];
+        if (laneEl) {
+          const rect = laneEl.getBoundingClientRect();
+          if (e.clientY >= rect.top - 12 && e.clientY <= rect.bottom + 12) {
+            hoveredFxTrack = tIdx;
+            break;
+          }
+        }
+      }
+      return;
+    }
+
     const ds = dragState;
     if (!ds) return;
     const rawSec = timeFromPointer(e.clientX);
@@ -872,11 +1357,21 @@
       const tSec = snapTime(rawSec);
       const idx = activeProject.keyframes.findIndex((k) => k.id === ds.id);
       if (idx >= 0) {
-        // Mover un punto en el tiempo jamás altera sus coordenadas originales (rawPose / localPose)
+        // Actualizar sin reordenar destructivamente durante el arrastre para evitar bugs de selección
         activeProject.keyframes[idx].time = tSec;
-        activeProject.keyframes.sort((a, b) => a.time - b.time);
         playheadTime = tSec;
         void refreshMathPreview(liveScrub);
+      }
+    } else if (ds.kind === "keyframe-stretch") {
+      const tSec = snapTime(rawSec);
+      const nextIdx = activeProject.keyframes.findIndex((k) => k.id === ds.nextId);
+      const currIdx = activeProject.keyframes.findIndex((k) => k.id === ds.id);
+      if (nextIdx >= 0 && currIdx >= 0) {
+        const minTime = activeProject.keyframes[currIdx].time + 0.1;
+        const newTime = Math.min(activeProject.duration, Math.max(minTime, tSec));
+        activeProject.keyframes[nextIdx].time = newTime;
+        playheadTime = newTime;
+        void refreshMathPreview(false);
       }
     } else if (ds.kind === "effect-move") {
       const idx = activeProject.effects.findIndex((ef) => ef.id === ds.id);
@@ -884,6 +1379,23 @@
         const ef = activeProject.effects[idx];
         const maxStart = Math.max(0, activeProject.duration - ef.duration);
         ef.startTime = Math.min(maxStart, Math.max(0, snapTime(rawSec - ds.offsetSec)));
+
+        // Calcular dinámicamente si el cursor cruzó a otra pista FX verticalmente
+        let bestTrack = ef.track;
+        let bestDist = Infinity;
+        for (let tIdx = 0; tIdx < 3; tIdx++) {
+          const laneEl = fxLaneEls[tIdx];
+          if (laneEl) {
+            const rect = laneEl.getBoundingClientRect();
+            const midY = (rect.top + rect.bottom) / 2;
+            const dist = Math.abs(e.clientY - midY);
+            if (dist < bestDist) {
+              bestDist = dist;
+              bestTrack = tIdx;
+            }
+          }
+        }
+        ef.track = bestTrack;
         void refreshMathPreview(false);
       }
     } else if (ds.kind === "effect-resize") {
@@ -898,7 +1410,18 @@
   }
 
   function onTimelinePointerUp() {
+    if (dragState?.kind === "keyframe" || dragState?.kind === "keyframe-stretch") {
+      activeProject.keyframes.sort((a, b) => a.time - b.time);
+      void refreshMathPreview(false);
+    }
+    if (draggingLibraryEffect && hoveredFxTrack !== null && timelineTrackEl) {
+      const dropTime = snapTime(timeFromPointer(draggingLibraryEffect.x));
+      addEffectToTimeline(draggingLibraryEffect.kind, dropTime, hoveredFxTrack);
+    }
     dragState = null;
+    draggingLibraryEffect = null;
+    hoveredFxTrack = null;
+    document.body.classList.remove("timeline-dragging");
   }
 
   onMount(() => {
@@ -912,6 +1435,7 @@
       })
       .catch(() => {});
     let teleTick = 0;
+    let lastState: string = "stopped";
     const poll = setInterval(async () => {
       try {
         const st = await api.studioStatus();
@@ -919,7 +1443,13 @@
         if (st.state === "playing") {
           playheadTime = st.currentTime;
           if (st.frame) evaluatedFrame = st.frame;
+        } else if (lastState === "playing" && st.state === "stopped") {
+          if (playheadTime >= activeProject.duration - 0.25) {
+            playheadTime = 0;
+            void refreshMathPreview(false);
+          }
         }
+        lastState = st.state;
         teleTick = (teleTick + 1) % 3;
         if (teleTick === 0) {
           telemetry = await api.telemetryStatus(activeProject);
@@ -935,20 +1465,131 @@
       }
     }, 80);
 
+    const unsubs = [
+      shortcutManager.registerAction("playPause", () => {
+        if (playbackStatus.state === "playing") api.studioControl("pause");
+        else if (activeProject.keyframes.length > 0) startPlayback(false);
+      }),
+      shortcutManager.registerAction("shuttleStop", () => {
+        void api.stopStudio();
+      }),
+      shortcutManager.registerAction("copySelected", () => {
+        copySelected();
+      }),
+      shortcutManager.registerAction("pasteSelected", () => {
+        pasteSelected();
+      }),
+      shortcutManager.registerAction("stepPrev", () => {
+        playheadTime = Math.max(0, Math.round((playheadTime - 0.1) * 100) / 100);
+        void refreshMathPreview(liveScrub);
+      }),
+      shortcutManager.registerAction("stepNext", () => {
+        playheadTime = Math.min(activeProject.duration, Math.round((playheadTime + 0.1) * 100) / 100);
+        void refreshMathPreview(liveScrub);
+      }),
+      shortcutManager.registerAction("jumpPrev1s", () => {
+        playheadTime = Math.max(0, Math.round((playheadTime - 1.0) * 100) / 100);
+        void refreshMathPreview(liveScrub);
+      }),
+      shortcutManager.registerAction("jumpNext1s", () => {
+        playheadTime = Math.min(activeProject.duration, Math.round((playheadTime + 1.0) * 100) / 100);
+        void refreshMathPreview(liveScrub);
+      }),
+      shortcutManager.registerAction("prevKeyframe", () => {
+        const sorted = [...activeProject.keyframes].sort((a, b) => a.time - b.time);
+        const prev = sorted.filter((k) => k.time < playheadTime - 0.05).pop();
+        if (prev) {
+          playheadTime = prev.time;
+          selectedKeyframeId = prev.id;
+          void refreshMathPreview(liveScrub);
+        }
+      }),
+      shortcutManager.registerAction("nextKeyframe", () => {
+        const sorted = [...activeProject.keyframes].sort((a, b) => a.time - b.time);
+        const next = sorted.find((k) => k.time > playheadTime + 0.05);
+        if (next) {
+          playheadTime = next.time;
+          selectedKeyframeId = next.id;
+          void refreshMathPreview(liveScrub);
+        }
+      }),
+      shortcutManager.registerAction("homeStart", () => {
+        playheadTime = 0;
+        void refreshMathPreview(liveScrub);
+      }),
+      shortcutManager.registerAction("endFinish", () => {
+        playheadTime = activeProject.duration;
+        void refreshMathPreview(liveScrub);
+      }),
+      shortcutManager.registerAction("addKeyframe", () => {
+        if (status.connected && status.open) {
+          void executeCaptureFromCamera();
+        }
+      }),
+      shortcutManager.registerAction("duplicateSelected", () => {
+        if (selectedKeyframeId) duplicateSelectedKeyframe();
+        else if (selectedEffectId) duplicateSelectedEffect();
+      }),
+      shortcutManager.registerAction("deleteSelected", () => {
+        if (selectedKeyframeId) deleteSelectedKeyframe();
+        else if (selectedEffectId) deleteSelectedEffect();
+      }),
+      shortcutManager.registerAction("toggleSnap", () => {
+        snapEnabled = !snapEnabled;
+      }),
+      shortcutManager.registerAction("zoomIn", () => {
+        timelineZoom = Math.min(8, timelineZoom + 0.5);
+      }),
+      shortcutManager.registerAction("zoomOut", () => {
+        timelineZoom = Math.max(1, timelineZoom - 0.5);
+      }),
+      shortcutManager.registerAction("openKeybindings", () => {
+        showKeybindingsModal = true;
+      }),
+    ];
+
     const onKeyDown = (ev: KeyboardEvent) => {
+      const target = ev.target as HTMLElement | null;
+      const isInput =
+        target &&
+        (target.tagName === "INPUT" ||
+          target.tagName === "TEXTAREA" ||
+          target.isContentEditable);
+
+      if (!isInput && (ev.ctrlKey || ev.metaKey) && !ev.shiftKey && !ev.altKey) {
+        const k = ev.key.toLowerCase();
+        if (k === "c" && (selectedKeyframeId || selectedEffectId)) {
+          ev.preventDefault();
+          copySelected();
+          return;
+        } else if (k === "v" && studioClipboard) {
+          ev.preventDefault();
+          pasteSelected();
+          return;
+        } else if (k === "d" && (selectedKeyframeId || selectedEffectId)) {
+          ev.preventDefault();
+          duplicateSelected();
+          return;
+        }
+      }
+
       if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === "z") {
         ev.preventDefault();
         if (ev.shiftKey) redo();
         else undo();
+        return;
       } else if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === "y") {
         ev.preventDefault();
         redo();
+        return;
       }
+      shortcutManager.handleKeyEvent(ev);
     };
     window.addEventListener("keydown", onKeyDown);
 
     return () => {
       clearInterval(poll);
+      unsubs.forEach((u) => u());
       window.removeEventListener("keydown", onKeyDown);
     };
   });
@@ -1036,7 +1677,7 @@
     </div>
 
     <!-- Selector Principal: [ Captura | Editor ] -->
-    <div class="mode-switch" role="tablist" aria-label="Modo de Iris Studio">
+    <div class="mode-switch" role="tablist" aria-label={t("studio.tabAriaLabel")}>
       <button
         type="button"
         role="tab"
@@ -1076,7 +1717,7 @@
             pendingDurationConflict = null;
           }}
         >
-          Cerrar
+          {t("studio.close")}
         </button>
       </div>
 
@@ -1267,7 +1908,7 @@
     <div class="studio-alert armed" role="status">
       <Radio size={16} />
       <span>{t("studio.captureArmedHint")}</span>
-      <button type="button" class="ghost sm" onclick={() => (captureArmed = false)}>Cancelar</button>
+      <button type="button" class="ghost sm" onclick={() => (captureArmed = false)}>{t("studio.cancel")}</button>
     </div>
   {/if}
 
@@ -1309,7 +1950,7 @@
             ? t("banner.disconnected")
             : !status.open
               ? t("banner.closed")
-              : "Registra la posición y rotación exactas de tu cámara de VRChat"}
+              : t("studio.capturePoint")}
           onclick={handleCaptureButton}
         >
           <CircleDot size={18} />
@@ -1319,7 +1960,7 @@
         <button
           type="button"
           class="ghost sm"
-          title="Añade un punto de prueba local para diseñar o practicar sin tener VRChat abierto"
+          title={t("studio.simPointTooltip")}
           onclick={addLocalTestPoint}
         >
           <Plus size={15} /> {t("studio.addSimPoint")}
@@ -1330,7 +1971,7 @@
           class="ghost sm"
           class:rec-active={recordingActive}
           disabled={!status.connected || !status.open}
-          title="Mueve tu cámara libremente mientras grabas; Iris convertirá el recorrido en puntos editables"
+          title={t("studio.recordHintTooltip")}
           onclick={toggleRecording}
         >
           <Radio size={15} />
@@ -1363,14 +2004,26 @@
             }}
           />
         </label>
-        <select
-          aria-label={t("studio.config.unitLabel")}
-          value={configUnit}
-          onchange={(e) => switchConfigUnit(e.currentTarget.value as DurationUnit)}
-        >
-          <option value="seconds">{t("studio.config.unitSeconds")} (s)</option>
-          <option value="minutes">{t("studio.config.unitMinutes")} (min)</option>
-        </select>
+        <div class="dur-unit-select-wrap">
+          <IrisSelect
+            items={configUnitOptions}
+            value={configUnit}
+            size="sm"
+            onchange={(val) => switchConfigUnit(val as DurationUnit)}
+          />
+        </div>
+        <div class="dur-preset-strip" title="Duraciones predeterminadas para acceso rápido">
+          {#each [5, 10, 15, 30, 60] as presetSec (presetSec)}
+            <button
+              type="button"
+              class="dur-pill"
+              class:active={Math.abs(activeProject.duration - presetSec) < 0.05}
+              onclick={() => requestDurationChange(presetSec)}
+            >
+              {presetSec}s
+            </button>
+          {/each}
+        </div>
         <button
           type="button"
           class="ghost sm"
@@ -1379,8 +2032,8 @@
         >
           <Sliders size={14} /> {formatSecondsToMmSs(activeProject.duration)}
         </button>
-        <div class="dur-select-field" title="Perfil del motor cinematográfico (inercia, suavizado y carácter de movimiento)">
-          <span class="field-label">Perfil</span>
+        <div class="dur-select-field" title={t("studio.engineTooltip")}>
+          <span class="field-label">{t("studio.profileLabel")}</span>
           <IrisSelect
             items={cinematicProfileOptions}
             value={activeProject.cinematic?.profile ?? "cinematic"}
@@ -1389,7 +2042,7 @@
           />
         </div>
         {#if presetMotions.length > 0}
-          <div class="dur-select-field preset-motion-field" title="Convierte un movimiento predefinido en una secuencia editable de puntos">
+          <div class="dur-select-field preset-motion-field" title={t("studio.presetMotionFieldTooltip")}>
             <IrisSelect
               items={presetMotionOptions}
               bind:value={selectedPresetMotion}
@@ -1400,7 +2053,7 @@
               class="ghost sm"
               onclick={() => loadPresetMotionIntoStudio(selectedPresetMotion)}
             >
-              <Orbit size={14} /> Cargar recorrido
+              <Orbit size={14} /> {t("studio.loadMotion")}
             </button>
           </div>
         {/if}
@@ -1419,7 +2072,7 @@
             type="button"
             class="ghost sm"
             disabled={activeProject.keyframes.length === 0}
-            title="Previsualiza el movimiento en el mapa espacial sin necesidad de conectar con VRChat"
+            title={t("studio.previewTooltip")}
             onclick={() => startPlayback(false)}
           >
             <Eye size={15} /> {t("studio.previewPlay")}
@@ -1428,7 +2081,7 @@
             type="button"
             class="primary sm"
             disabled={activeProject.keyframes.length === 0 || !status.connected || !status.open}
-            title="Mueve la cámara de VRChat en tiempo real a 60 Hz siguiendo tu secuencia (no requiere VRC+)"
+            title={t("studio.livePlayTooltip")}
             onclick={() => startPlayback(true)}
           >
             <Play size={15} /> {t("studio.livePlay")}
@@ -1458,16 +2111,16 @@
     {#if activeProject.rawRecording.length > 0}
       <section class="recording-refine-bar card">
         <div>
-          <strong>Recorrido continuo grabado ({activeProject.rawRecording.length} muestras originales intactas)</strong>
-          <p class="sub">Ajusta cuánto quieres suavizar o simplificar el recorrido sin perder tu grabación original:</p>
+          <strong>{t("studio.rawRecordingHeading", { samples: activeProject.rawRecording.length })}</strong>
+          <p class="sub">{t("studio.pulseSub")}</p>
         </div>
         <div class="refine-controls">
           <label>
-            Tolerancia (m): <strong>{posTolM.toFixed(2)}m</strong>
+            {t("studio.tolerance")} <strong>{posTolM.toFixed(2)}m</strong>
             <input type="range" min="0.01" max="0.2" step="0.01" bind:value={posTolM} />
           </label>
           <label>
-            Suavizado de pulso: <strong>{smoothingPasses} pasadas</strong>
+            {t("studio.pulseSmoothing", { passes: smoothingPasses })}
             <input type="range" min="0" max="5" step="1" bind:value={smoothingPasses} />
           </label>
           <button type="button" class="ghost sm" onclick={applyResimplification}>
@@ -1483,14 +2136,14 @@
         <section class="card simple-timeline-card">
           <div class="tl-header">
             <h3>
-              Línea de tiempo ({activeProject.duration} s · {formatSecondsToMmSs(activeProject.duration)})
+              {t("studio.timelineTitle", { dur: activeProject.duration, mmss: formatSecondsToMmSs(activeProject.duration) })}
             </h3>
             <div class="quick-effect-adder">
-              <select bind:value={quickEffectKind} aria-label={t("studio.addEffect")}>
-                {#each EFFECT_CATALOG as item (item.kind)}
-                  <option value={item.kind}>{t(item.labelKey)}</option>
-                {/each}
-              </select>
+              <IrisSelect
+                items={quickEffectKindOptions}
+                bind:value={quickEffectKind}
+                size="sm"
+              />
               <button type="button" class="ghost sm" onclick={() => addEffectToTimeline(quickEffectKind)}>
                 <Plus size={14} /> {t("studio.addEffect")}
               </button>
@@ -1498,25 +2151,36 @@
           </div>
 
           <!-- Pista interactiva con Regla Temporal + Pista de Recorrido + Pista de Efectos -->
-          <div class="timeline-lanes" bind:this={timelineTrackEl}>
-            <!-- Regla de tiempo adaptativa -->
+          <div class="timeline-lanes">
             <!-- svelte-ignore a11y_no_static_element_interactions -->
             <div
-              class="tl-ruler"
-              onpointerdown={(e) => {
-                playheadTime = Math.round(timeFromPointer(e.clientX) * 100) / 100;
-                dragState = { kind: "playhead" };
-                void refreshMathPreview(liveScrub);
-              }}
+              class="tl-track-body"
+              bind:this={timelineTrackEl}
+              oncontextmenu={openTimelineContextMenu}
             >
-              {#each captureTimelineTicks as tick (tick.time)}
-                <span class="tick" style="left: {tick.leftPct}%">
-                  {tick.label}
-                </span>
-              {/each}
-            </div>
+              <!-- Regla de tiempo adaptativa -->
+              <!-- svelte-ignore a11y_no_static_element_interactions -->
+              <div
+                class="tl-ruler"
+                onpointerdown={(e) => {
+                  playheadTime = Math.round(timeFromPointer(e.clientX) * 100) / 100;
+                  dragState = { kind: "playhead" };
+                  void refreshMathPreview(liveScrub);
+                }}
+              >
+                {#each captureTimelineTicks as tick (tick.time)}
+                  <span class="tick" style="left: {tick.leftPct}%">
+                    {tick.label}
+                  </span>
+                {/each}
+              </div>
 
-            <!-- Pista 1: Recorrido de cámara (Puntos A, B, C...) -->
+              <!-- Guía de origen 0.0s -->
+              <div class="tl-origin-line" style="left: 0%">
+                <span class="tl-origin-badge">0.0s</span>
+              </div>
+
+            <!-- Pista 1: Recorrido de cámara (Puntos A, B, C...) con segmentos estirables -->
             <!-- svelte-ignore a11y_no_static_element_interactions -->
             <div
               class="tl-lane path-lane"
@@ -1530,8 +2194,43 @@
             >
               <span class="lane-label">{t("studio.trackPath")}</span>
               {#if activeProject.keyframes.length === 0}
-                <span class="lane-empty">Pulsa «Capturar posición» para colocar el Punto A</span>
+                <span class="lane-empty">{t("studio.timelineEmpty")}</span>
               {/if}
+
+              <!-- Barras de segmento entre puntos para alargar/estirar directamente desde el timeline -->
+              {#each activeProject.keyframes as kf, idx (kf.id + "-seg-cap")}
+                {#if idx < activeProject.keyframes.length - 1}
+                  {@const nextKf = activeProject.keyframes[idx + 1]}
+                  {@const segLeftPct = (kf.time / Math.max(0.1, activeProject.duration)) * 100}
+                  {@const segWidthPct = Math.max(0, ((nextKf.time - kf.time) / Math.max(0.1, activeProject.duration)) * 100)}
+                  {@const segDuration = Math.max(0, nextKf.time - kf.time)}
+                  <!-- svelte-ignore a11y_no_static_element_interactions -->
+                  <div
+                    class="kf-segment-bar"
+                    style="left: {segLeftPct}%; width: {segWidthPct}%;"
+                    title="Segmento {kf.label} → {nextKf.label} ({segDuration.toFixed(2)}s). Arrastra el extremo derecho para estirar duración."
+                  >
+                    <span class="seg-fill"></span>
+                    <span class="seg-badge">{segDuration.toFixed(1)}s</span>
+                    <span
+                      class="seg-stretch-handle"
+                      title={t("studio.stretchHandleTooltip")}
+                      onpointerdown={(e) => {
+                        e.stopPropagation();
+                        pushUndoSnapshot();
+                        document.body.classList.add("timeline-dragging");
+                        dragState = {
+                          kind: "keyframe-stretch",
+                          id: kf.id,
+                          nextId: nextKf.id,
+                          origNextTime: nextKf.time,
+                        };
+                      }}
+                    ></span>
+                  </div>
+                {/if}
+              {/each}
+
               {#each activeProject.keyframes as kf (kf.id)}
                 {@const leftPct = (kf.time / Math.max(0.1, activeProject.duration)) * 100}
                 <button
@@ -1539,16 +2238,22 @@
                   class="kf-pill"
                   class:selected={selectedKeyframeId === kf.id}
                   style="left: {leftPct}%"
-                  title="{kf.label} ({kf.time.toFixed(2)}s) — Arrastra para cambiar su instante temporal"
+                  title="{kf.label} ({kf.time.toFixed(2)}s) — Doble click para editar rápido, click derecho para menú"
                   onpointerdown={(e) => {
                     e.stopPropagation();
                     pushUndoSnapshot();
+                    document.body.classList.add("timeline-dragging");
                     selectedKeyframeId = kf.id;
                     selectedEffectId = null;
                     playheadTime = kf.time;
                     dragState = { kind: "keyframe", id: kf.id };
                     void refreshMathPreview(false);
                   }}
+                  ondblclick={(e) => {
+                    e.stopPropagation();
+                    quickEditorState = { open: true, keyframe: kf, x: e.clientX, y: e.clientY };
+                  }}
+                  oncontextmenu={(e) => openKeyframeContextMenu(kf, e)}
                 >
                   <span class="kf-dot"></span>
                   <span>{kf.label}</span>
@@ -1576,6 +2281,7 @@
                   onpointerdown={(e) => {
                     e.stopPropagation();
                     pushUndoSnapshot();
+                    document.body.classList.add("timeline-dragging");
                     selectedEffectId = ef.id;
                     selectedKeyframeId = null;
                     const clickSec = timeFromPointer(e.clientX);
@@ -1585,14 +2291,16 @@
                       offsetSec: clickSec - ef.startTime,
                     };
                   }}
+                  oncontextmenu={(e) => openEffectContextMenu(ef, e)}
                 >
                   <span class="fx-title">{catEntry ? t(catEntry.labelKey) : ef.kind}</span>
                   <span
                     class="fx-resize-handle"
-                    title="Arrastra para ajustar duración"
+                    title={t("studio.dragDurationTooltip")}
                     onpointerdown={(e) => {
                       e.stopPropagation();
                       pushUndoSnapshot();
+                      document.body.classList.add("timeline-dragging");
                       selectedEffectId = ef.id;
                       dragState = { kind: "effect-resize", id: ef.id };
                     }}
@@ -1601,13 +2309,18 @@
               {/each}
             </div>
 
-            <!-- Cursor de reproducción (Playhead) -->
+            <!-- Cursor de reproducción (Playhead) con badge de tiempo -->
             <div
               class="playhead-line"
               style="left: {(playheadTime / Math.max(0.1, activeProject.duration)) * 100}%"
-            ></div>
+            >
+              <span class="playhead-badge">
+                {formatTimeReadout(playheadTime, activeProject.duration)}
+              </span>
+            </div>
           </div>
-        </section>
+        </div>
+      </section>
 
         <!-- Tarjeta de edición sencilla para el Punto o Efecto seleccionado -->
         {#if selectedKeyframe}
@@ -1617,10 +2330,10 @@
                 class="label-edit"
                 type="text"
                 bind:value={selectedKeyframe.label}
-                aria-label="Nombre del punto"
+                aria-label={t("studio.pointNameAria")}
               />
               <span class="badge">
-                {selectedKeyframe.capturedAtMs > 0 ? "Lectura real VRChat" : "Punto local"} ·
+                {selectedKeyframe.capturedAtMs > 0 ? t("studio.readingVrc") : t("studio.readingLocal")} ·
                 {selectedKeyframe.time.toFixed(2)}s
               </span>
             </div>
@@ -1628,30 +2341,25 @@
             <div class="qi-row">
               <label>
                 <span>{t("studio.transition")}</span>
-                <select
+                <IrisSelect
+                  items={transitionOptions}
                   bind:value={selectedKeyframe.transition}
+                  size="sm"
                   onchange={() => refreshMathPreview(false)}
-                >
-                  <option value="linear">{t("studio.trans.linear")}</option>
-                  <option value="smooth">{t("studio.trans.smooth")}</option>
-                  <option value="slowIn">{t("studio.trans.slowIn")}</option>
-                  <option value="slowOut">{t("studio.trans.slowOut")}</option>
-                  <option value="smoothInOut">{t("studio.trans.smoothInOut")}</option>
-                </select>
+                />
               </label>
 
-              <label title="Define si la cámara cruza este punto con velocidad continua o si frena suavemente en él">
-                <span>Continuidad en punto</span>
-                <select
+              <label title={t("studio.knotModeTooltip")}>
+                <span>{t("studio.knotModeTitle")}</span>
+                <IrisSelect
+                  items={knotModeOptions}
                   value={selectedKeyframe.knotMode ?? "passThrough"}
-                  onchange={(e) => {
-                    selectedKeyframe.knotMode = e.currentTarget.value as "passThrough" | "stop";
+                  size="sm"
+                  onchange={(val) => {
+                    selectedKeyframe.knotMode = val as "passThrough" | "stop";
                     refreshMathPreview(false);
                   }}
-                >
-                  <option value="passThrough">Paso continuo (C1 sin frenar)</option>
-                  <option value="stop">Parada suave en punto</option>
-                </select>
+                />
               </label>
 
               <div class="qi-actions">
@@ -1683,7 +2391,7 @@
             </div>
             <div class="qi-sliders">
               <label>
-                <span>Intensidad ({selectedEffect.intensity.toFixed(1)}×)</span>
+                <span>{t("studio.intensity", { val: selectedEffect.intensity.toFixed(1) })}</span>
                 <input
                   type="range"
                   min="0.1"
@@ -1694,7 +2402,7 @@
                 />
               </label>
               <label class="dur-field">
-                <span>Duración clip (s)</span>
+                <span>{t("studio.clipDuration")}</span>
                 <input
                   type="number"
                   min="0.2"
@@ -1705,7 +2413,7 @@
                 />
               </label>
               <label>
-                <span>Velocidad ({selectedEffect.speed.toFixed(1)}×)</span>
+                <span>{t("studio.clipSpeed", { speed: selectedEffect.speed.toFixed(1) })}</span>
                 <input
                   type="range"
                   min="0.2"
@@ -1716,7 +2424,7 @@
                 />
               </label>
               <button type="button" class="ghost sm danger" onclick={deleteSelectedEffect}>
-                <Trash2 size={14} /> Eliminar efecto
+                <Trash2 size={14} /> {t("studio.deleteEffect")}
               </button>
             </div>
           </section>
@@ -1735,6 +2443,7 @@
             selectedKeyframeId = id;
             selectedEffectId = null;
           }}
+          onUpdateKeyframePos={updateKeyframePos}
         />
       </div>
     </div>
@@ -1749,7 +2458,7 @@
           <Search size={14} />
           <input
             type="search"
-            placeholder="Buscar movimiento o efecto…"
+            placeholder={t("studio.searchPlaceholder")}
             bind:value={librarySearch}
           />
         </div>
@@ -1761,7 +2470,7 @@
             class:active={libraryCategory === "movement"}
             onclick={() => (libraryCategory = "movement")}
           >
-            Movimientos
+            {t("studio.tabMovements")}
           </button>
           <button
             type="button"
@@ -1769,7 +2478,7 @@
             class:active={libraryCategory === "micro"}
             onclick={() => (libraryCategory = "micro")}
           >
-            Microefectos
+            {t("studio.secMicro")}
           </button>
           <button
             type="button"
@@ -1777,7 +2486,7 @@
             class:active={libraryCategory === "optics"}
             onclick={() => (libraryCategory = "optics")}
           >
-            Óptica
+            {t("studio.secOptics")}
           </button>
           <button
             type="button"
@@ -1785,23 +2494,31 @@
             class:active={libraryCategory === "presets"}
             onclick={() => (libraryCategory = "presets")}
           >
-            Secuencias
+            {t("studio.secSequences")}
           </button>
         </div>
 
         <div class="lib-items">
           {#if libraryCategory !== "presets"}
             {#each filteredCatalog as item (item.kind)}
-              <div class="lib-item">
+              <!-- svelte-ignore a11y_no_static_element_interactions -->
+              <div
+                class="lib-item draggable-item"
+                title="Arrastra este efecto directamente sobre una Pista FX en el timeline, o presiona + para insertarlo en el cursor"
+                onpointerdown={(e) => onLibraryItemPointerDown(item.kind, e)}
+              >
                 <div>
                   <strong>{t(item.labelKey)}</strong>
-                  <p>{item.shortDesc}</p>
+                  <p>{getEffectDesc(item)}</p>
                 </div>
                 <button
                   type="button"
                   class="ghost sm"
-                  title="Añadir al timeline en la posición del cursor ({playheadTime.toFixed(1)}s)"
-                  onclick={() => addEffectToTimeline(item.kind)}
+                  title={t("studio.addAtCursorTooltip", { time: playheadTime.toFixed(1) })}
+                  onclick={(e) => {
+                    e.stopPropagation();
+                    addEffectToTimeline(item.kind);
+                  }}
                 >
                   <Plus size={14} />
                 </button>
@@ -1812,7 +2529,7 @@
               <div class="lib-item">
                 <div>
                   <strong>{seq.name}</strong>
-                  <p>{seq.duration}s · {seq.keyframes.length} puntos · {seq.effects.length} efectos</p>
+                  <p>{seq.duration}s · {t("library.pointsCount", { count: seq.keyframes.length })} · {t("library.effectsCount", { count: seq.effects.length })}</p>
                 </div>
                 <button
                   type="button"
@@ -1823,7 +2540,7 @@
                     playheadTime = 0;
                   }}
                 >
-                  Cargar
+                  {t("studio.load")}
                 </button>
               </div>
             {/each}
@@ -1844,23 +2561,24 @@
             selectedEffectId = null;
             inspectorTab = "selection";
           }}
+          onUpdateKeyframePos={updateKeyframePos}
         />
 
         <!-- Telemetría que diferencia Pose Recibida (VRChat), Pose Relativa (Ancla) y Pose Evaluada/Enviada -->
         <div class="telemetry-bar card">
           <div class="tele-col">
-            <span class="tele-label vrc">1. Lectura real VRChat (`/usercamera/Pose`)</span>
+            <span class="tele-label vrc">{t("studio.telemetry1")}</span>
             {#if status.camera?.poseFresh && status.camera.pose}
               <code>
                 XYZ: {status.camera.pose.pos.map((v) => v.toFixed(2)).join(", ")} m | PYR:
                 {status.camera.pose.rot.map((v) => v.toFixed(1)).join("°, ")}°
               </code>
             {:else}
-              <code class="muted">Sin lectura reciente (mueve la cámara en VRChat)</code>
+              <code class="muted">{t("studio.noRecentTelemetry")}</code>
             {/if}
           </div>
           <div class="tele-col">
-            <span class="tele-label base">2. Pose Base Interpolada ({playheadTime.toFixed(2)}s)</span>
+            <span class="tele-label base">{t("studio.telemetry2", { time: playheadTime.toFixed(2) })}</span>
             {#if evaluatedFrame}
               <code>
                 XYZ: {evaluatedFrame.basePose.pos.map((v) => v.toFixed(2)).join(", ")} m | PYR:
@@ -1869,7 +2587,7 @@
             {/if}
           </div>
           <div class="tele-col">
-            <span class="tele-label final">3. Pose Final con Efectos (Enviada a OSC)</span>
+            <span class="tele-label final">{t("studio.telemetry3")}</span>
             {#if evaluatedFrame}
               <code>
                 XYZ: {evaluatedFrame.finalPose.pos.map((v) => v.toFixed(2)).join(", ")} m | Zoom:
@@ -1879,22 +2597,22 @@
             {/if}
           </div>
           <div class="tele-col">
-            <span class="tele-label vrc">4. Realimentación y Calibración</span>
+            <span class="tele-label vrc">{t("studio.feedbackTelemetry")}</span>
             {#if telemetry}
               <code>
                 {#if telemetry.certainty.kind === "measured"}
-                  Medido (seq #{telemetry.certainty.seq} · {telemetry.certainty.ageMs}ms)
+                  {t("studio.telemetry.measured", { seq: telemetry.certainty.seq, age: telemetry.certainty.ageMs })}
                 {:else if telemetry.certainty.kind === "estimated"}
-                  Estimado ({Math.round(telemetry.certainty.confidence * 100)}% · {telemetry.certainty.reason})
+                  {t("studio.telemetry.estimated", { pct: Math.round(telemetry.certainty.confidence * 100), reason: telemetry.certainty.reason })}
                 {:else}
-                  Control Abierto ({telemetry.certainty.reason})
+                  {t("studio.telemetry.openLoop", { reason: telemetry.certainty.reason })}
                 {/if}
                 {#if telemetry.posErrorM != null}
                   | Err: {(telemetry.posErrorM * 1000).toFixed(1)} mm / {(telemetry.rotErrorDeg ?? 0).toFixed(2)}°
                 {/if}
               </code>
             {:else}
-              <code class="muted">Inicializando diagnóstico…</code>
+              <code class="muted">{t("studio.initDiag")}</code>
             {/if}
           </div>
         </div>
@@ -1917,7 +2635,7 @@
             class:active={inspectorTab === "calibration"}
             onclick={() => (inspectorTab = "calibration")}
           >
-            <Crosshair size={13} /> Espacio y Objetivo
+            <Crosshair size={13} /> {t("studio.tabSpaceTarget")}
           </button>
         </div>
 
@@ -1926,11 +2644,11 @@
             <div class="insp-body">
               <div class="insp-row-two">
                 <label>
-                  <span>Etiqueta</span>
+                  <span>{t("studio.labelField")}</span>
                   <input type="text" bind:value={selectedKeyframe.label} />
                 </label>
                 <label>
-                  <span>Tiempo (s)</span>
+                  <span>{t("studio.timeSecField")}</span>
                   <input
                     type="number"
                     min="0"
@@ -1946,140 +2664,175 @@
               </div>
 
               <div class="insp-row-two">
-                <label>
-                  <span>Curva de interpolación (Easing)</span>
-                  <select
-                    bind:value={selectedKeyframe.transition}
-                    onchange={() => refreshMathPreview(false)}
+                <div class="curve-field-col">
+                  <label>
+                    <span>{t("studio.easingCurve")}</span>
+                    <IrisSelect
+                      items={transitionOptions}
+                      bind:value={selectedKeyframe.transition}
+                      size="sm"
+                      onchange={() => refreshMathPreview(false)}
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    class="ghost sm custom-curve-btn"
+                    class:has-curve={Boolean(selectedKeyframe.customCurve)}
+                    onclick={() => openCurveEditorForKeyframe(selectedKeyframe)}
+                    title={t("studio.customCurveBtnTooltip")}
                   >
-                    <option value="linear">{t("studio.trans.linear")} — Linear</option>
-                    <option value="smooth">{t("studio.trans.smooth")} — Cosine In-Out</option>
-                    <option value="slowIn">{t("studio.trans.slowIn")} — Cubic Ease-In</option>
-                    <option value="slowOut">{t("studio.trans.slowOut")} — Cubic Ease-Out</option>
-                    <option value="smoothInOut">{t("studio.trans.smoothInOut")} — Cubic S-Curve</option>
-                  </select>
-                </label>
+                    <Sparkles size={13} />
+                    <span>{selectedKeyframe.customCurve ? t("studio.curveActive") : t("studio.customCurve")}</span>
+                  </button>
+                </div>
 
-                <label title="Paso continuo C1 evita que la cámara se detenga en puntos intermedios">
-                  <span>Continuidad en punto</span>
-                  <select
+                <label title={t("studio.knotModeTooltip")}>
+                  <span>{t("studio.knotModeTitle")}</span>
+                  <IrisSelect
+                    items={knotModeOptions}
                     value={selectedKeyframe.knotMode ?? "passThrough"}
-                    onchange={(e) => {
-                      selectedKeyframe.knotMode = e.currentTarget.value as "passThrough" | "stop";
+                    size="sm"
+                    onchange={(val) => {
+                      selectedKeyframe.knotMode = val as "passThrough" | "stop";
                       refreshMathPreview(false);
                     }}
-                  >
-                    <option value="passThrough">Paso continuo (C1)</option>
-                    <option value="stop">Parada suave</option>
-                  </select>
+                  />
                 </label>
               </div>
 
-              <h4>Posición recibida / mundo (m)</h4>
-              <div class="xyz-grid">
-                {#each ["X", "Y", "Z"] as axis, i (axis)}
-                  <label>
-                    <span>{axis}</span>
-                    <input
-                      type="number"
-                      step="0.05"
-                      bind:value={selectedKeyframe.rawPose.pos[i]}
-                      oninput={() => refreshMathPreview(liveScrub)}
-                    />
-                  </label>
-                {/each}
-              </div>
+              <!-- Posición 3D en el Mundo con Acordeón Moderno -->
+              <button
+                type="button"
+                class="insp-accordion-btn"
+                onclick={() => (inspectorAccordion.pos = !inspectorAccordion.pos)}
+              >
+                <span>{t("studio.posWorld")}</span>
+                <ChevronDown size={14} class="insp-chevron {!inspectorAccordion.pos ? 'rotated' : ''}" />
+              </button>
+              {#if inspectorAccordion.pos}
+                <div class="xyz-grid">
+                  {#each ["X", "Y", "Z"] as axis, i (axis)}
+                    <label>
+                      <span>{axis}</span>
+                      <input
+                        type="number"
+                        step="0.05"
+                        bind:value={selectedKeyframe.rawPose.pos[i]}
+                        oninput={() => refreshMathPreview(liveScrub)}
+                      />
+                    </label>
+                  {/each}
+                </div>
+              {/if}
 
-              <h4>Rotación Euler (° · SLERP Quaternion)</h4>
-              <div class="xyz-grid">
-                {#each ["Pitch", "Yaw", "Roll"] as axis, i (axis)}
-                  <label>
-                    <span>{axis}</span>
-                    <input
-                      type="number"
-                      step="1"
-                      bind:value={selectedKeyframe.rawPose.rot[i]}
-                      oninput={() => refreshMathPreview(liveScrub)}
-                    />
-                  </label>
-                {/each}
-              </div>
+              <!-- Rotación Euler con Acordeón Moderno -->
+              <button
+                type="button"
+                class="insp-accordion-btn"
+                onclick={() => (inspectorAccordion.rot = !inspectorAccordion.rot)}
+              >
+                <span>{t("studio.rotEuler")}</span>
+                <ChevronDown size={14} class="insp-chevron {!inspectorAccordion.rot ? 'rotated' : ''}" />
+              </button>
+              {#if inspectorAccordion.rot}
+                <div class="xyz-grid">
+                  {#each ["Pitch", "Yaw", "Roll"] as axis, i (axis)}
+                    <label>
+                      <span>{axis}</span>
+                      <input
+                        type="number"
+                        step="1"
+                        bind:value={selectedKeyframe.rawPose.rot[i]}
+                        oninput={() => refreshMathPreview(liveScrub)}
+                      />
+                    </label>
+                  {/each}
+                </div>
+              {/if}
 
               {#if selectedKeyframe.localPose}
                 <p class="local-readout">
-                  Offset relativo al ancla: [{selectedKeyframe.localPose.pos
-                    .map((v) => v.toFixed(2))
-                    .join(", ")} m]
+                  {t("studio.anchorOffsetReadout", { pos: selectedKeyframe.localPose.pos.map((v) => v.toFixed(2)).join(", ") })}
                 </p>
               {/if}
 
-              <h4>Canales ópticos en este keyframe</h4>
-              <div class="insp-row-two">
-                <label>
-                  <span>Zoom (20–300 mm)</span>
-                  <input
-                    type="number"
-                    min="20"
-                    max="300"
-                    step="1"
-                    placeholder="Sin cambio"
-                    value={selectedKeyframe.look.zoom ?? ""}
-                    oninput={(e) => {
-                      const val = e.currentTarget.value.trim();
-                      selectedKeyframe.look.zoom = val === "" ? null : Number(val);
-                      refreshMathPreview(liveScrub);
-                    }}
-                  />
-                </label>
-                <label>
-                  <span>Exposición (-10..4 EV)</span>
-                  <input
-                    type="number"
-                    min="-10"
-                    max="4"
-                    step="0.2"
-                    placeholder="Sin cambio"
-                    value={selectedKeyframe.look.exposure ?? ""}
-                    oninput={(e) => {
-                      const val = e.currentTarget.value.trim();
-                      selectedKeyframe.look.exposure = val === "" ? null : Number(val);
-                      refreshMathPreview(liveScrub);
-                    }}
-                  />
-                </label>
-                <label>
-                  <span>Enfoque (0–10 m)</span>
-                  <input
-                    type="number"
-                    min="0"
-                    max="10"
-                    step="0.1"
-                    placeholder="Sin cambio"
-                    value={selectedKeyframe.look.focalDistance ?? ""}
-                    oninput={(e) => {
-                      const val = e.currentTarget.value.trim();
-                      selectedKeyframe.look.focalDistance = val === "" ? null : Number(val);
-                      refreshMathPreview(liveScrub);
-                    }}
-                  />
-                </label>
-                <label>
-                  <span>Apertura (f/1.4–32)</span>
-                  <input
-                    type="number"
-                    min="1.4"
-                    max="32"
-                    step="0.2"
-                    placeholder="Sin cambio"
-                    value={selectedKeyframe.look.aperture ?? ""}
-                    oninput={(e) => {
-                      const val = e.currentTarget.value.trim();
-                      selectedKeyframe.look.aperture = val === "" ? null : Number(val);
-                      refreshMathPreview(liveScrub);
-                    }}
-                  />
-                </label>
-              </div>
+              <!-- Canales Ópticos con Acordeón Moderno -->
+              <button
+                type="button"
+                class="insp-accordion-btn"
+                onclick={() => (inspectorAccordion.optics = !inspectorAccordion.optics)}
+              >
+                <span>{t("studio.opticalChannels")}</span>
+                <ChevronDown size={14} class="insp-chevron {!inspectorAccordion.optics ? 'rotated' : ''}" />
+              </button>
+              {#if inspectorAccordion.optics}
+                <div class="insp-row-two">
+                  <label>
+                    <span>Zoom (20–300 mm)</span>
+                    <input
+                      type="number"
+                      min="20"
+                      max="300"
+                      step="1"
+                      placeholder={t("studio.noChangePlaceholder")}
+                      value={selectedKeyframe.look.zoom ?? ""}
+                      oninput={(e) => {
+                        const val = e.currentTarget.value.trim();
+                        selectedKeyframe.look.zoom = val === "" ? null : Number(val);
+                        refreshMathPreview(liveScrub);
+                      }}
+                    />
+                  </label>
+                  <label>
+                    <span>{t("studio.exposureRange")}</span>
+                    <input
+                      type="number"
+                      min="-10"
+                      max="4"
+                      step="0.2"
+                      placeholder="Sin cambio"
+                      value={selectedKeyframe.look.exposure ?? ""}
+                      oninput={(e) => {
+                        const val = e.currentTarget.value.trim();
+                        selectedKeyframe.look.exposure = val === "" ? null : Number(val);
+                        refreshMathPreview(liveScrub);
+                      }}
+                    />
+                  </label>
+                  <label>
+                    <span>{t("studio.focusManualRange")}</span>
+                    <input
+                      type="number"
+                      min="0"
+                      max="10"
+                      step="0.1"
+                      placeholder="Sin cambio"
+                      value={selectedKeyframe.look.focalDistance ?? ""}
+                      oninput={(e) => {
+                        const val = e.currentTarget.value.trim();
+                        selectedKeyframe.look.focalDistance = val === "" ? null : Number(val);
+                        refreshMathPreview(liveScrub);
+                      }}
+                    />
+                  </label>
+                  <label>
+                    <span>{t("studio.apertureRange")}</span>
+                    <input
+                      type="number"
+                      min="1.4"
+                      max="32"
+                      step="0.2"
+                      placeholder="Sin cambio"
+                      value={selectedKeyframe.look.aperture ?? ""}
+                      oninput={(e) => {
+                        const val = e.currentTarget.value.trim();
+                        selectedKeyframe.look.aperture = val === "" ? null : Number(val);
+                        refreshMathPreview(liveScrub);
+                      }}
+                    />
+                  </label>
+                </div>
+              {/if}
 
               <div class="insp-actions">
                 <button
@@ -2091,10 +2844,10 @@
                   <Camera size={14} /> {t("studio.updatePoint")}
                 </button>
                 <button type="button" class="ghost sm" onclick={duplicateSelectedKeyframe}>
-                  <Copy size={14} /> Duplicar
+                  <Copy size={14} /> {t("studio.duplicatePoint")}
                 </button>
                 <button type="button" class="ghost sm danger" onclick={deleteSelectedKeyframe}>
-                  <Trash2 size={14} /> Eliminar
+                  <Trash2 size={14} /> {t("studio.deletePoint")}
                 </button>
               </div>
             </div>
@@ -2103,19 +2856,17 @@
             <div class="insp-body">
               <div class="insp-head-inline">
                 <strong>{catEntry ? t(catEntry.labelKey) : selectedEffect.kind}</strong>
-                <label class="scale-check">
-                  <input
-                    type="checkbox"
-                    bind:checked={selectedEffect.enabled}
-                    onchange={() => refreshMathPreview(false)}
-                  />
-                  <span>Activo</span>
-                </label>
+                <IrisCheckbox
+                  variant="switch"
+                  bind:checked={selectedEffect.enabled}
+                  onchange={() => refreshMathPreview(false)}
+                  label={t("studio.active")}
+                />
               </div>
 
               <div class="insp-row-two">
                 <label>
-                  <span>Inicio (s)</span>
+                  <span>{t("studio.startSec")}</span>
                   <input
                     type="number"
                     min="0"
@@ -2126,7 +2877,7 @@
                   />
                 </label>
                 <label>
-                  <span>Duración (s)</span>
+                  <span>{t("studio.durationSec")}</span>
                   <input
                     type="number"
                     min="0.2"
@@ -2140,36 +2891,42 @@
 
               <div class="insp-row-two">
                 <label>
-                  <span>Pista multipista</span>
-                  <select
-                    value={selectedEffect.track}
-                    onchange={(e) => {
-                      selectedEffect.track = Number(e.currentTarget.value);
+                  <span>{t("studio.multitrack")}</span>
+                  <IrisSelect
+                    items={fxTrackOptions}
+                    value={String(selectedEffect.track)}
+                    size="sm"
+                    onchange={(val) => {
+                      selectedEffect.track = Number(val);
                       refreshMathPreview(false);
                     }}
-                  >
-                    <option value={0}>Pista FX 1 (Principal)</option>
-                    <option value={1}>Pista FX 2 (Superpuesta)</option>
-                    <option value={2}>Pista FX 3 (Auxiliar)</option>
-                  </select>
+                  />
                 </label>
-                <label>
-                  <span>Curva Easing</span>
-                  <select
-                    bind:value={selectedEffect.easing}
-                    onchange={() => refreshMathPreview(false)}
+                <div class="curve-field-col">
+                  <label>
+                    <span>{t("studio.easingCurve")}</span>
+                    <IrisSelect
+                      items={transitionOptions}
+                      bind:value={selectedEffect.easing}
+                      size="sm"
+                      onchange={() => refreshMathPreview(false)}
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    class="ghost sm custom-curve-btn"
+                    class:has-curve={Boolean(selectedEffect.customCurve)}
+                    onclick={() => openCurveEditorForEffect(selectedEffect)}
+                    title={t("studio.customCurveBtnTooltip")}
                   >
-                    <option value="linear">Lineal</option>
-                    <option value="smooth">Suave (Seno)</option>
-                    <option value="slowIn">Entrada lenta</option>
-                    <option value="slowOut">Salida lenta</option>
-                    <option value="smoothInOut">Entrada/Salida suaves</option>
-                  </select>
-                </label>
+                    <Sparkles size={13} />
+                    <span>{selectedEffect.customCurve ? t("studio.curveActive") : t("studio.customCurve")}</span>
+                  </button>
+                </div>
               </div>
 
               <label>
-                <span>Intensidad ({selectedEffect.intensity.toFixed(2)}×)</span>
+                <span>{t("studio.intensity", { val: selectedEffect.intensity.toFixed(2) })}</span>
                 <input
                   type="range"
                   min="0.1"
@@ -2181,7 +2938,7 @@
               </label>
 
               <label>
-                <span>Velocidad / Frecuencia ({selectedEffect.speed.toFixed(2)}×)</span>
+                <span>{t("studio.clipSpeedFreq", { speed: selectedEffect.speed.toFixed(2) })}</span>
                 <input
                   type="range"
                   min="0.2"
@@ -2192,10 +2949,10 @@
                 />
               </label>
 
-              {#if catEntry?.paramALabel}
+              {#if catEntry && getEffectParamALabel(catEntry)}
                 <div class="insp-row-two">
                   <label>
-                    <span>{catEntry.paramALabel}</span>
+                    <span>{getEffectParamALabel(catEntry)}</span>
                     <input
                       type="number"
                       step="0.2"
@@ -2206,9 +2963,9 @@
                       }}
                     />
                   </label>
-                  {#if catEntry?.paramBLabel}
+                  {#if getEffectParamBLabel(catEntry)}
                     <label>
-                      <span>{catEntry.paramBLabel}</span>
+                      <span>{getEffectParamBLabel(catEntry)}</span>
                       <input
                         type="number"
                         step="0.2"
@@ -2225,10 +2982,10 @@
 
               <div class="insp-actions">
                 <button type="button" class="ghost sm" onclick={duplicateSelectedEffect}>
-                  <Copy size={14} /> Duplicar clip
+                  <Copy size={14} /> {t("studio.duplicateClip")}
                 </button>
                 <button type="button" class="ghost sm danger" onclick={deleteSelectedEffect}>
-                  <Trash2 size={14} /> Eliminar clip
+                  <Trash2 size={14} /> {t("studio.deleteClip")}
                 </button>
               </div>
             </div>
@@ -2238,23 +2995,21 @@
         {:else}
           <!-- Pestaña de Motor Cinematográfico, Calibración Técnica/Visual, Espacio y TargetProvider -->
           <div class="insp-body">
-            <h4>Motor Cinematográfico</h4>
+            <h4>{t("studio.engineTitle")}</h4>
             <label>
-              <span>Perfil de movimiento</span>
-              <select
+              <span>{t("studio.profileLabel")}</span>
+              <IrisSelect
+                items={cinematicProfileOptions}
                 value={activeProject.cinematic?.profile ?? "cinematic"}
-                onchange={(e) => applyCinematicProfile(e.currentTarget.value as CinematicProfile)}
-              >
-                <option value="cinematic">Cinemático (suave y natural)</option>
-                <option value="precision">Precisión (reproducible y exacto)</option>
-                <option value="organic">Orgánico (variación sutil reproducible)</option>
-              </select>
+                size="sm"
+                onchange={(val) => applyCinematicProfile(val as CinematicProfile)}
+              />
             </label>
 
             {#if activeProject.cinematic}
               <div class="insp-row-two">
                 <label>
-                  <span>Inercia τ ({activeProject.cinematic.inertiaTau.toFixed(2)} s)</span>
+                  <span>{t("studio.inertiaTau", { tau: activeProject.cinematic.inertiaTau.toFixed(2) })}</span>
                   <input
                     type="range"
                     min="0"
@@ -2264,7 +3019,7 @@
                   />
                 </label>
                 <label>
-                  <span>Vel. máx ({activeProject.cinematic.maxLinearSpeed.toFixed(1)} m/s)</span>
+                  <span>{t("studio.maxSpeed", { val: activeProject.cinematic.maxLinearSpeed.toFixed(1) })}</span>
                   <input
                     type="range"
                     min="0.5"
@@ -2276,7 +3031,7 @@
               </div>
 
               <label>
-                <span>Variación orgánica ({Math.round((activeProject.cinematic.organicVariation ?? 0) * 100)}%)</span>
+                <span>{t("studio.organicVar", { pct: Math.round((activeProject.cinematic.organicVariation ?? 0) * 100) })}</span>
                 <input
                   type="range"
                   min="0"
@@ -2290,28 +3045,21 @@
 
             <hr class="sep" />
 
-            <h4>Calibración Técnica y Visual (No destructiva)</h4>
+            <h4>{t("studio.calibTitle")}</h4>
             {#if activeProject.calibration}
               <div class="insp-row-two">
-                <label class="scale-check">
-                  <input
-                    type="checkbox"
-                    bind:checked={activeProject.calibration.enabled}
-                    onchange={() => refreshMathPreview(liveScrub)}
-                  />
-                  <span>Calibración activa</span>
-                </label>
-                <label
-                  class="scale-check"
-                  title="Corrige desviaciones sistemáticas solo cuando existe lectura real verificada (máx ±15 cm / ±5°)"
-                >
-                  <input
-                    type="checkbox"
-                    bind:checked={activeProject.calibration.autoCorrect}
-                    disabled={!activeProject.calibration.enabled}
-                  />
-                  <span>Auto-corrección</span>
-                </label>
+                <IrisCheckbox
+                  variant="switch"
+                  bind:checked={activeProject.calibration.enabled}
+                  onchange={() => refreshMathPreview(liveScrub)}
+                  label={t("studio.calibActive")}
+                />
+                <IrisCheckbox
+                  variant="switch"
+                  bind:checked={activeProject.calibration.autoCorrect}
+                  disabled={!activeProject.calibration.enabled}
+                  label={t("studio.autoCorrect")}
+                />
               </div>
 
               {#if activeProject.calibration.enabled}
@@ -2333,7 +3081,7 @@
 
                 <div class="insp-row-two">
                   <label>
-                    <span>Offset Yaw (°)</span>
+                    <span>{t("studio.offsetYaw")}</span>
                     <input
                       type="number"
                       step="0.5"
@@ -2342,7 +3090,7 @@
                     />
                   </label>
                   <label>
-                    <span>Offset Pitch (°)</span>
+                    <span>{t("studio.offsetPitch")}</span>
                     <input
                       type="number"
                       step="0.5"
@@ -2352,8 +3100,8 @@
                   </label>
                 </div>
 
-                <label title="Encuadre visual horizontal según la focal activa (Regla de los Tercios)">
-                  <span>Encuadre horizontal / Tercios ({activeProject.calibration.compositionX.toFixed(2)})</span>
+                <label title={t("studio.framingOffset")}>
+                  <span>{t("studio.framingOffsetRule", { val: activeProject.calibration.compositionX.toFixed(2) })}</span>
                   <input
                     type="range"
                     min="-1"
@@ -2365,8 +3113,8 @@
                 </label>
 
                 <div class="insp-row-two">
-                  <label title="Ajuste vertical de aire sobre la cabeza (Headroom)">
-                    <span>Headroom Y ({activeProject.calibration.compositionY.toFixed(2)})</span>
+                  <label title={t("studio.headroomTooltip")}>
+                    <span>{t("studio.headroomY", { val: activeProject.calibration.compositionY.toFixed(2) })}</span>
                     <input
                       type="range"
                       min="-1"
@@ -2376,8 +3124,8 @@
                       oninput={() => refreshMathPreview(liveScrub)}
                     />
                   </label>
-                  <label title="Anticipa el giro hacia la dirección de avance de la cámara">
-                    <span>Lead Room ({activeProject.calibration.leadRoom.toFixed(2)})</span>
+                  <label title={t("studio.leadRoom")}>
+                    <span>{t("studio.leadRoomVal", { val: activeProject.calibration.leadRoom.toFixed(2) })}</span>
                     <input
                       type="range"
                       min="0"
@@ -2391,32 +3139,31 @@
               {/if}
 
               <button type="button" class="ghost sm" onclick={restoreCalibrationDefaults}>
-                <RotateCcw size={14} /> Restaurar calibración
+                <RotateCcw size={14} /> {t("studio.resetCalib")}
               </button>
 
               {#if telemetry && telemetry.log.length > 0}
                 <p class="local-readout">
-                  Último ajuste: {telemetry.log[telemetry.log.length - 1].reason}
+                  {t("studio.lastAdjustment", { reason: telemetry.log[telemetry.log.length - 1].reason })}
                 </p>
               {/if}
             {/if}
 
             <hr class="sep" />
 
-            <h4>Espacio de Referencia y Portabilidad</h4>
+            <h4>{t("studio.spacePortability")}</h4>
             <label>
-              <span>Modo espacial</span>
-              <select
+              <span>{t("studio.spatialMode")}</span>
+              <IrisSelect
+                items={referenceSpaceOptions}
                 bind:value={activeProject.space}
+                size="sm"
                 onchange={() => refreshMathPreview(false)}
-              >
-                <option value="anchor">{t("studio.space.anchor")}</option>
-                <option value="world">{t("studio.space.world")}</option>
-              </select>
+              />
             </label>
 
             <label>
-              <span>Escala de trayectoria ({activeProject.trajectoryScale.toFixed(2)}×)</span>
+              <span>{t("studio.trajectoryScale", { scale: activeProject.trajectoryScale.toFixed(2) })}</span>
               <input
                 type="range"
                 min="0.25"
@@ -2431,71 +3178,60 @@
               type="button"
               class="ghost sm"
               disabled={!status.anchored}
-              title="Recalcula los offsets relativos de los puntos respecto a tu ancla calibrada actual"
+              title={t("studio.rebindTooltip")}
               onclick={bindCurrentAnchorToProject}
             >
-              <Crosshair size={14} /> Re-vincular puntos al ancla actual
+              <Crosshair size={14} /> {t("studio.rebindAnchor")}
             </button>
 
             <hr class="sep" />
 
-            <h4>Seguimiento de Objetivo (`TargetProvider`)</h4>
-            <label class="scale-check">
-              <input
-                type="checkbox"
-                checked={Boolean(activeProject.target?.enabled)}
-                onchange={(e) => {
-                  const enabled = e.currentTarget.checked;
-                  const defaultPos = status.anchor?.eye ?? [0, 1.65, 0];
-                  activeProject.target = {
-                    enabled,
-                    source: activeProject.target?.source ?? "staticCalibratedPoint",
-                    worldPos: activeProject.target?.worldPos ?? [...defaultPos],
-                    blend: activeProject.target?.blend ?? 1.0,
-                    confidence: 1.0,
-                    capturedAtMs: activeProject.target?.capturedAtMs ?? 0,
-                  };
-                  refreshMathPreview(false);
-                }}
-              />
-              <span>Mantener objetivo encuadrado</span>
-            </label>
+            <h4>{t("studio.trackingTargetTitle")}</h4>
+            <IrisCheckbox
+              variant="switch"
+              checked={Boolean(activeProject.target?.enabled)}
+              onchange={(checked) => {
+                const defaultPos = status.anchor?.eye ?? [0, 1.65, 0];
+                activeProject.target = {
+                  enabled: checked,
+                  source: activeProject.target?.source ?? "calibratedAnchor",
+                  worldPos: activeProject.target?.worldPos ?? [...defaultPos],
+                  blend: activeProject.target?.blend ?? 1.0,
+                  confidence: 1.0,
+                  capturedAtMs: activeProject.target?.capturedAtMs ?? 0,
+                };
+                refreshMathPreview(false);
+              }}
+              label={t("studio.keepTargetFramed")}
+            />
 
             {#if activeProject.target}
               <label>
-                <span>Fuente (`TargetSourceKind`)</span>
-                <select
-                  value={activeProject.target.source ?? "staticCalibratedPoint"}
-                  onchange={(e) => {
+                <span>{t("studio.targetSourceLabel")}</span>
+                <IrisSelect
+                  items={targetSourceOptions}
+                  value={activeProject.target.source ?? "calibratedAnchor"}
+                  size="sm"
+                  onchange={(val) => {
                     if (!activeProject.target) return;
-                    const src = e.currentTarget.value as TargetSourceKind;
+                    const src = val as TargetSourceKind;
                     activeProject.target.source = src;
                     if (src === "calibratedAnchor" && status.anchor) {
                       activeProject.target.worldPos = [...status.anchor.eye];
                     }
                     refreshMathPreview(false);
                   }}
-                >
-                  <option value="staticCalibratedPoint">Punto estático calibrado con cámara</option>
-                  <option value="calibratedAnchor">Ancla calibrada del jugador</option>
-                  <option value="manualReference">Coordenada manual</option>
-                  <option value="companionAvatarOsc" disabled>
-                    Puente OSC de Avatar Compatible (Experimental)
-                  </option>
-                  <option value="companionUdonBridge" disabled>
-                    Asset de Mundo Udon (Experimental)
-                  </option>
-                </select>
+                />
               </label>
 
               <button
                 type="button"
                 class="ghost sm"
                 disabled={!status.connected || !status.open}
-                title="Coloca la cámara en el punto u objeto que quieres mirar y pulsa aquí"
+                title={t("studio.captureTargetTooltip")}
                 onclick={captureTargetFromCamera}
               >
-                <Camera size={14} /> Capturar objetivo con la cámara
+                <Camera size={14} /> {t("studio.captureTargetCamera")}
               </button>
 
               <div class="xyz-grid">
@@ -2513,7 +3249,7 @@
               </div>
 
               <label>
-                <span>Mezcla de mirada ({Math.round(activeProject.target.blend * 100)}%)</span>
+                <span>{t("studio.lookBlend", { pct: Math.round(activeProject.target.blend * 100) })}</span>
                 <input
                   type="range"
                   min="0"
@@ -2542,32 +3278,92 @@
             <CircleDot size={14} /> {t("studio.capturePoint")}
           </button>
           <button type="button" class="ghost sm" onclick={addLocalTestPoint}>
-            <Plus size={14} /> Punto local
+            <Plus size={14} /> {t("studio.localPoint")}
           </button>
 
-          {#if playbackStatus.state === "playing"}
-            <button type="button" class="ghost sm" onclick={() => api.studioControl("pause")}>
-              <Pause size={14} /> {t("studio.pause")}
-            </button>
-            <button type="button" class="ghost sm" onclick={() => api.stopStudio()}>
-              <Square size={14} /> {t("studio.stop")}
-            </button>
-          {:else}
+          <!-- Barra de Transporte Completa Profesional -->
+          <div class="transport-nav-group" role="group" aria-label="Transport">
             <button
               type="button"
-              class="ghost sm"
+              class="ghost sm icon-only"
+              onclick={jumpToStart}
+              title={t("studio.transport.toStart")}
+            >
+              <SkipBack size={13} />
+            </button>
+            <button
+              type="button"
+              class="ghost sm icon-only"
+              onclick={() => stepTime(-1.0)}
+              title={t("studio.transport.prev1s")}
+            >
+              <Rewind size={13} />
+            </button>
+            <button
+              type="button"
+              class="ghost sm icon-only"
+              onclick={jumpToPrevKeyframe}
+              title={t("studio.transport.prevKf")}
+            >
+              <ChevronLeft size={13} />
+            </button>
+
+            {#if playbackStatus.state === "playing"}
+              <button
+                type="button"
+                class="primary sm icon-only play-toggle-btn"
+                onclick={() => api.studioControl("pause")}
+                title={t("studio.pause")}
+              >
+                <Pause size={14} />
+              </button>
+            {:else}
+              <button
+                type="button"
+                class="primary sm icon-only play-toggle-btn"
+                disabled={activeProject.keyframes.length === 0}
+                onclick={() => startPlayback(false)}
+                title={t("studio.previewPlay")}
+              >
+                <Play size={14} />
+              </button>
+            {/if}
+
+            <button
+              type="button"
+              class="ghost sm icon-only"
+              onclick={jumpToNextKeyframe}
+              title={t("studio.transport.nextKf")}
+            >
+              <ChevronRight size={13} />
+            </button>
+            <button
+              type="button"
+              class="ghost sm icon-only"
+              onclick={() => stepTime(1.0)}
+              title={t("studio.transport.next1s")}
+            >
+              <FastForward size={13} />
+            </button>
+            <button
+              type="button"
+              class="ghost sm icon-only"
+              onclick={jumpToEnd}
+              title={t("studio.transport.toEnd")}
+            >
+              <SkipForward size={13} />
+            </button>
+          </div>
+
+          {#if status.connected && status.open}
+            <button
+              type="button"
+              class="ghost sm live-play-btn"
               disabled={activeProject.keyframes.length === 0}
-              onclick={() => startPlayback(false)}
-            >
-              <Eye size={14} /> {t("studio.previewPlay")}
-            </button>
-            <button
-              type="button"
-              class="primary sm"
-              disabled={activeProject.keyframes.length === 0 || !status.connected || !status.open}
               onclick={() => startPlayback(true)}
+              title={t("studio.livePlay")}
             >
-              <Play size={14} /> {t("studio.livePlay")}
+              <Play size={13} /> {t("studio.livePlay")}
             </button>
           {/if}
 
@@ -2588,7 +3384,7 @@
             <Sliders size={14} /> {t("studio.config.button")} ({formatSecondsToMmSs(activeProject.duration)})
           </button>
 
-          <label class="scale-check" title="Envía la pose evaluada a la cámara de VRChat mientras arrastras el cursor">
+          <label class="scale-check" title={t("studio.liveScrubLabel")}>
             <input type="checkbox" bind:checked={liveScrub} />
             <span>Live Scrub OSC</span>
           </label>
@@ -2598,7 +3394,7 @@
             class="ghost sm"
             class:pressed={snapEnabled}
             onclick={() => (snapEnabled = !snapEnabled)}
-            title="Imantar puntos y clips a la rejilla temporal"
+            title={t("studio.snapGrid")}
           >
             <Magnet size={14} /> Snap
           </button>
@@ -2615,28 +3411,73 @@
         <div
           class="ed-tl-canvas"
           style="width: {100 * timelineZoom}%"
-          bind:this={timelineTrackEl}
         >
-          <!-- Regla de tiempo adaptativa -->
           <!-- svelte-ignore a11y_no_static_element_interactions -->
           <div
-            class="tl-ruler"
-            onpointerdown={(e) => {
-              playheadTime = Math.round(timeFromPointer(e.clientX) * 100) / 100;
-              dragState = { kind: "playhead" };
-              void refreshMathPreview(liveScrub);
-            }}
+            class="tl-track-body"
+            bind:this={timelineTrackEl}
+            oncontextmenu={openTimelineContextMenu}
           >
-            {#each editorTimelineTicks as tick (tick.time)}
-              <span class="tick" style="left: {tick.leftPct}%">
-                {tick.label}
-              </span>
-            {/each}
-          </div>
+            <!-- Regla de tiempo adaptativa -->
+            <!-- svelte-ignore a11y_no_static_element_interactions -->
+            <div
+              class="tl-ruler"
+              onpointerdown={(e) => {
+                playheadTime = Math.round(timeFromPointer(e.clientX) * 100) / 100;
+                dragState = { kind: "playhead" };
+                void refreshMathPreview(liveScrub);
+              }}
+            >
+              {#each editorTimelineTicks as tick (tick.time)}
+                <span class="tick" style="left: {tick.leftPct}%">
+                  {tick.label}
+                </span>
+              {/each}
+            </div>
 
-          <!-- Pista 1: Trayectoria 3D (Posición X/Y/Z) -->
+            <!-- Guía de origen 0.0s -->
+            <div class="tl-origin-line" style="left: 0%">
+              <span class="tl-origin-badge">0.0s</span>
+            </div>
+
+          <!-- Pista 1: Trayectoria 3D (Posición X/Y/Z) con segmentos estirables -->
           <div class="tl-lane track-pos">
             <span class="lane-label"><Video size={12} /> {t("studio.trackPath")} (X/Y/Z)</span>
+
+            <!-- Barras de segmento entre puntos para alargar/estirar directamente desde el timeline -->
+            {#each activeProject.keyframes as kf, idx (kf.id + "-seg-ed")}
+              {#if idx < activeProject.keyframes.length - 1}
+                {@const nextKf = activeProject.keyframes[idx + 1]}
+                {@const segLeftPct = (kf.time / Math.max(0.1, activeProject.duration)) * 100}
+                {@const segWidthPct = Math.max(0, ((nextKf.time - kf.time) / Math.max(0.1, activeProject.duration)) * 100)}
+                {@const segDuration = Math.max(0, nextKf.time - kf.time)}
+                <!-- svelte-ignore a11y_no_static_element_interactions -->
+                <div
+                  class="kf-segment-bar"
+                  style="left: {segLeftPct}%; width: {segWidthPct}%;"
+                  title="Segmento {kf.label} → {nextKf.label} ({segDuration.toFixed(2)}s). Arrastra el extremo derecho para estirar."
+                >
+                  <span class="seg-fill"></span>
+                  <span class="seg-badge">{segDuration.toFixed(1)}s</span>
+                  <span
+                    class="seg-stretch-handle"
+                    title={t("studio.stretchHandleTooltip")}
+                    onpointerdown={(e) => {
+                      e.stopPropagation();
+                      pushUndoSnapshot();
+                      document.body.classList.add("timeline-dragging");
+                      dragState = {
+                        kind: "keyframe-stretch",
+                        id: kf.id,
+                        nextId: nextKf.id,
+                        origNextTime: nextKf.time,
+                      };
+                    }}
+                  ></span>
+                </div>
+              {/if}
+            {/each}
+
             {#each activeProject.keyframes as kf (kf.id)}
               {@const leftPct = (kf.time / Math.max(0.1, activeProject.duration)) * 100}
               <button
@@ -2644,18 +3485,26 @@
                 class="kf-pill"
                 class:selected={selectedKeyframeId === kf.id}
                 style="left: {leftPct}%"
+                title="{kf.label} ({kf.time.toFixed(2)}s) — Doble click para editar rápido, click derecho para menú"
                 onpointerdown={(e) => {
                   e.stopPropagation();
                   pushUndoSnapshot();
+                  document.body.classList.add("timeline-dragging");
                   selectedKeyframeId = kf.id;
                   selectedEffectId = null;
                   inspectorTab = "selection";
                   playheadTime = kf.time;
                   dragState = { kind: "keyframe", id: kf.id };
                 }}
+                ondblclick={(e) => {
+                  e.stopPropagation();
+                  quickEditorState = { open: true, keyframe: kf, x: e.clientX, y: e.clientY };
+                }}
+                oncontextmenu={(e) => openKeyframeContextMenu(kf, e)}
               >
                 <span class="kf-dot"></span>
                 <span>{kf.label}</span>
+                <small>{kf.time.toFixed(1)}s</small>
               </button>
             {/each}
           </div>
@@ -2705,7 +3554,11 @@
 
           <!-- Pistas Multipista de Efectos Superponibles (Pistas FX 1, FX 2, FX 3) -->
           {#each [0, 1, 2] as trackIdx (trackIdx)}
-            <div class="tl-lane fx-lane">
+            <div
+              class="tl-lane fx-lane"
+              class:is-drop-target={hoveredFxTrack === trackIdx}
+              bind:this={fxLaneEls[trackIdx]}
+            >
               <span class="lane-label"><Layers size={12} /> Pista FX {trackIdx + 1}</span>
               {#each activeProject.effects.filter((e) => e.track === trackIdx) as ef (ef.id)}
                 {@const startPct = (ef.startTime / Math.max(0.1, activeProject.duration)) * 100}
@@ -2720,9 +3573,11 @@
                   class:selected={selectedEffectId === ef.id}
                   class:disabled={!ef.enabled}
                   style="left: {startPct}%; width: {widthPct}%"
+                  title="{catEntry ? t(catEntry.labelKey) : ef.kind} ({ef.startTime.toFixed(1)}–{(ef.startTime + ef.duration).toFixed(1)}s) — Click derecho para opciones"
                   onpointerdown={(e) => {
                     e.stopPropagation();
                     pushUndoSnapshot();
+                    document.body.classList.add("timeline-dragging");
                     selectedEffectId = ef.id;
                     selectedKeyframeId = null;
                     inspectorTab = "selection";
@@ -2733,13 +3588,16 @@
                       offsetSec: clickSec - ef.startTime,
                     };
                   }}
+                  oncontextmenu={(e) => openEffectContextMenu(ef, e)}
                 >
                   <span class="fx-title">{catEntry ? t(catEntry.labelKey) : ef.kind}</span>
                   <span
                     class="fx-resize-handle"
+                    title={t("studio.dragDurationTooltip")}
                     onpointerdown={(e) => {
                       e.stopPropagation();
                       pushUndoSnapshot();
+                      document.body.classList.add("timeline-dragging");
                       selectedEffectId = ef.id;
                       dragState = { kind: "effect-resize", id: ef.id };
                     }}
@@ -2749,14 +3607,82 @@
             </div>
           {/each}
 
-          <!-- Cursor de reproducción (Playhead) -->
+          <!-- Cursor de reproducción (Playhead) con badge numérico -->
           <div
             class="playhead-line"
             style="left: {(playheadTime / Math.max(0.1, activeProject.duration)) * 100}%"
-          ></div>
+          >
+            <span class="playhead-badge">
+              {formatTimeReadout(playheadTime, activeProject.duration)}
+            </span>
+          </div>
         </div>
       </div>
-    </section>
+    </div>
+  </section>
+  {/if}
+
+  <!-- Menú Contextual Flotante -->
+  <IrisContextMenu
+    bind:open={contextMenu.open}
+    x={contextMenu.x}
+    y={contextMenu.y}
+    items={contextMenu.items}
+    onclose={() => (contextMenu.open = false)}
+  />
+
+  <!-- Editor Rápido de Keyframe en Popover Flotante al dar Doble Click -->
+  {#if quickEditorState.open && quickEditorState.keyframe}
+    <KeyframeQuickEditor
+      bind:open={quickEditorState.open}
+      bind:keyframe={quickEditorState.keyframe}
+      x={quickEditorState.x}
+      y={quickEditorState.y}
+      maxDuration={activeProject.duration}
+      canUpdateFromCamera={status.connected && status.open}
+      onupdate={updateSelectedKeyframeFromCamera}
+      onduplicate={duplicateSelectedKeyframe}
+      ondelete={deleteSelectedKeyframe}
+      onchange={() => refreshMathPreview(false)}
+      onclose={() => {
+        quickEditorState.open = false;
+        refreshMathPreview(false);
+      }}
+    />
+  {/if}
+
+  <!-- Modal del Editor de Curvas Bézier Personalizadas -->
+  <CurveEditorModal
+    bind:open={showCurveEditorModal}
+    curve={curveEditorTarget?.curve ?? [0.4, 0.0, 0.2, 1.0]}
+    onapply={handleCustomCurveSaved}
+    onclose={() => {
+      showCurveEditorModal = false;
+      curveEditorTarget = null;
+    }}
+  />
+
+  <!-- Modal de Atajos de Teclado Personalizables (Estilo Premiere Pro) -->
+  <KeybindingsModal
+    bind:open={showKeybindingsModal}
+    onclose={() => (showKeybindingsModal = false)}
+  />
+
+  <!-- Ghost flotante animado al arrastrar efectos desde la biblioteca -->
+  {#if draggingLibraryEffect}
+    {@const dragged = draggingLibraryEffect}
+    <div
+      class="library-drag-ghost"
+      style="left: {dragged.x + 12}px; top: {dragged.y + 12}px;"
+    >
+      <Sparkles size={14} />
+      <span>
+        {t(EFFECT_CATALOG.find((c) => c.kind === dragged.kind)?.labelKey ?? dragged.kind)}
+      </span>
+      {#if hoveredFxTrack !== null}
+        <span class="ghost-target-pill">Pista FX {hoveredFxTrack + 1}</span>
+      {/if}
+    </div>
   {/if}
 </div>
 
@@ -3133,6 +4059,39 @@
     user-select: none;
     overflow: hidden;
   }
+  .tl-track-body {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin: 0 36px;
+  }
+  .tl-origin-line {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 2px;
+    background: linear-gradient(180deg, var(--lavender) 0%, rgba(184, 169, 255, 0.25) 100%);
+    pointer-events: none;
+    z-index: 4;
+    box-shadow: 0 0 8px rgba(184, 169, 255, 0.4);
+  }
+  .tl-origin-badge {
+    position: absolute;
+    top: -2px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 0.62rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    color: #ffffff;
+    background: rgba(39, 65, 200, 0.85);
+    border: 1px solid rgba(184, 169, 255, 0.45);
+    border-radius: 4px;
+    padding: 1px 5px;
+    white-space: nowrap;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+  }
   .tl-ruler {
     position: relative;
     height: 22px;
@@ -3270,7 +4229,8 @@
     width: 2px;
     background: #ff708d;
     pointer-events: none;
-    z-index: 5;
+    z-index: 6;
+    box-shadow: 0 0 10px rgba(255, 112, 141, 0.6);
   }
   .playhead-line::before {
     content: "";
@@ -3281,6 +4241,24 @@
     height: 12px;
     border-radius: 999px;
     background: #ff708d;
+    box-shadow: 0 0 8px rgba(255, 112, 141, 0.8);
+  }
+  .playhead-badge {
+    position: absolute;
+    top: -20px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 0.68rem;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    color: #ffffff;
+    background: #ff4770;
+    border: 1px solid rgba(255, 255, 255, 0.4);
+    border-radius: 6px;
+    padding: 2px 6px;
+    white-space: nowrap;
+    box-shadow: 0 3px 8px rgba(0, 0, 0, 0.5);
+    pointer-events: none;
   }
 
   /* Quick Inspector del Modo Captura */
@@ -3321,7 +4299,7 @@
   /* MODO EDITOR (4 Regiones) */
   .editor-grid {
     display: grid;
-    grid-template-columns: 265px 1fr 305px;
+    grid-template-columns: 265px 1fr 320px;
     gap: 12px;
     align-items: stretch;
   }
@@ -3330,7 +4308,14 @@
       grid-template-columns: 1fr;
     }
   }
-  .editor-library,
+  .editor-library {
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    max-height: 455px;
+    overflow-y: auto;
+  }
   .editor-inspector {
     padding: 12px;
     display: flex;
@@ -3338,6 +4323,7 @@
     gap: 10px;
     max-height: 455px;
     overflow-y: auto;
+    overflow-x: hidden !important;
   }
   .lib-search {
     display: flex;
@@ -3445,6 +4431,21 @@
     flex-direction: column;
     gap: 9px;
     font-size: 0.78rem;
+    min-width: 0;
+    max-width: 100%;
+    overflow-x: hidden;
+  }
+  .insp-body input[type="range"] {
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
+  }
+  .insp-body input[type="number"],
+  .insp-body input[type="text"] {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
   }
   .insp-body h4 {
     margin: 6px 0 0;
@@ -3458,19 +4459,30 @@
     flex-direction: column;
     gap: 3px;
     color: var(--text-2);
+    min-width: 0;
   }
   .insp-row-two {
     display: grid;
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
     gap: 6px;
+    min-width: 0;
+  }
+  .insp-row-two > * {
+    min-width: 0;
   }
   .xyz-grid {
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 6px;
+    min-width: 0;
+  }
+  .xyz-grid > * {
+    min-width: 0;
   }
   .xyz-grid input {
     width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
   }
   .local-readout {
     margin: 0;
@@ -3520,6 +4532,50 @@
     gap: 8px;
     flex-wrap: wrap;
   }
+  .transport-nav-group {
+    display: inline-flex;
+    align-items: center;
+    background: rgba(14, 10, 26, 0.6);
+    border: 1px solid rgba(184, 169, 255, 0.16);
+    border-radius: 10px;
+    padding: 2px;
+    gap: 1px;
+  }
+  .transport-nav-group :global(.icon-only) {
+    padding: 5px 7px;
+    border-radius: 7px;
+    border: 0;
+    color: var(--text-2);
+    min-width: 28px;
+    height: 28px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
+  }
+  .transport-nav-group :global(.icon-only:hover:not(:disabled)) {
+    background: rgba(184, 169, 255, 0.12);
+    color: var(--text);
+  }
+  .transport-nav-group :global(.play-toggle-btn) {
+    background: var(--accent) !important;
+    color: #ffffff !important;
+    font-weight: 600;
+    padding: 5px 9px;
+  }
+  .transport-nav-group :global(.play-toggle-btn:hover:not(:disabled)) {
+    filter: brightness(1.15);
+    box-shadow: 0 0 12px var(--accent-glow);
+  }
+  .live-play-btn {
+    border-color: rgba(61, 90, 254, 0.4);
+    color: var(--lavender);
+  }
+  .live-play-btn:hover:not(:disabled) {
+    border-color: var(--accent);
+    color: #ffffff;
+    background: rgba(61, 90, 254, 0.15);
+  }
   .zoom-slider {
     display: inline-flex;
     align-items: center;
@@ -3536,5 +4592,207 @@
   .track-rot,
   .track-optics {
     height: 34px;
+  }
+
+  /* Preset pills in Duration Bar */
+  .dur-preset-strip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 4px;
+    background: rgba(14, 10, 26, 0.5);
+    border: 1px solid rgba(184, 169, 255, 0.12);
+    border-radius: 8px;
+  }
+  .dur-pill {
+    background: transparent;
+    border: 0;
+    color: var(--text-2);
+    font-size: 0.74rem;
+    font-weight: 500;
+    padding: 3px 7px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background 0.15s ease, color 0.15s ease;
+  }
+  .dur-pill:hover {
+    background: rgba(184, 169, 255, 0.1);
+    color: var(--text);
+  }
+  .dur-pill.active {
+    background: var(--accent);
+    color: #ffffff;
+    font-weight: 600;
+  }
+  .dur-unit-select-wrap {
+    min-width: 90px;
+  }
+
+  /* Connecting Segment Bars between Keyframe points */
+  .kf-segment-bar {
+    position: absolute;
+    top: 13px;
+    height: 18px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1;
+    pointer-events: auto;
+  }
+  .seg-fill {
+    position: absolute;
+    left: 0;
+    right: 0;
+    height: 3px;
+    background: linear-gradient(90deg, rgba(61, 90, 254, 0.5), rgba(184, 169, 255, 0.65));
+    border-radius: 2px;
+    pointer-events: none;
+  }
+  .seg-badge {
+    position: relative;
+    z-index: 2;
+    font-size: 0.64rem;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    color: var(--lavender);
+    background: rgba(14, 10, 26, 0.88);
+    border: 1px solid rgba(184, 169, 255, 0.28);
+    border-radius: 999px;
+    padding: 1px 6px;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
+    pointer-events: none;
+  }
+  .seg-stretch-handle {
+    position: absolute;
+    right: -4px;
+    top: 0;
+    bottom: 0;
+    width: 9px;
+    cursor: ew-resize;
+    z-index: 3;
+    border-radius: 4px;
+    transition: background 0.15s ease;
+  }
+  .seg-stretch-handle:hover {
+    background: rgba(255, 255, 255, 0.4);
+    box-shadow: 0 0 8px rgba(255, 255, 255, 0.6);
+  }
+
+  /* Multi-track FX Lane Drop Target Highlighting */
+  .tl-lane.fx-lane {
+    transition: background 0.15s ease, border-color 0.15s ease;
+  }
+  .tl-lane.fx-lane.is-drop-target {
+    background: rgba(61, 90, 254, 0.22);
+    border-color: rgba(61, 90, 254, 0.65);
+    box-shadow: inset 0 0 14px rgba(61, 90, 254, 0.25);
+  }
+
+  /* Library Draggable Item */
+  .draggable-item {
+    cursor: grab;
+    user-select: none;
+    transition: transform 0.12s ease, border-color 0.12s ease;
+  }
+  .draggable-item:active {
+    cursor: grabbing;
+    transform: scale(0.98);
+  }
+
+  /* Library Drag Ghost Animation */
+  .library-drag-ghost {
+    position: fixed;
+    z-index: 9999;
+    pointer-events: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 12px;
+    background: rgba(22, 14, 40, 0.92);
+    backdrop-filter: blur(12px);
+    border: 1.5px solid var(--accent);
+    box-shadow: 0 10px 28px rgba(0, 0, 0, 0.6), 0 0 16px rgba(61, 90, 254, 0.4);
+    border-radius: 10px;
+    color: #ffffff;
+    font-size: 0.8rem;
+    font-weight: 600;
+    transform: translate(-50%, -50%);
+    animation: ghostPulse 1.5s infinite alternate ease-in-out;
+  }
+  .ghost-target-pill {
+    font-size: 0.68rem;
+    padding: 2px 6px;
+    border-radius: 6px;
+    background: var(--accent);
+    color: #fff;
+  }
+  @keyframes ghostPulse {
+    from {
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5), 0 0 10px rgba(61, 90, 254, 0.3);
+    }
+    to {
+      box-shadow: 0 12px 32px rgba(0, 0, 0, 0.7), 0 0 20px rgba(61, 90, 254, 0.6);
+    }
+  }
+
+  /* Modern Accordion in Right Inspector */
+  .insp-accordion-btn {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    width: 100%;
+    padding: 7px 10px;
+    background: rgba(14, 10, 26, 0.45);
+    border: 1px solid rgba(184, 169, 255, 0.12);
+    border-radius: 8px;
+    color: var(--lavender);
+    font-size: 0.76rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    cursor: pointer;
+    transition: background 0.15s ease, border-color 0.15s ease;
+    margin-top: 4px;
+  }
+  .insp-accordion-btn:hover {
+    background: rgba(184, 169, 255, 0.08);
+    border-color: rgba(184, 169, 255, 0.22);
+  }
+  :global(.insp-chevron) {
+    transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  :global(.insp-chevron.rotated) {
+    transform: rotate(-90deg);
+  }
+
+  /* Custom Curve Button */
+  .curve-field-col {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+  }
+  .curve-field-col > label {
+    min-width: 0;
+  }
+  .custom-curve-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 0.72rem;
+    padding: 3px 8px;
+    align-self: flex-start;
+    border-radius: 6px;
+    border: 1px dashed rgba(184, 169, 255, 0.24);
+    color: var(--text-2);
+  }
+  .custom-curve-btn:hover {
+    border-color: var(--lavender);
+    color: var(--lavender);
+  }
+  .custom-curve-btn.has-curve {
+    border: 1px solid var(--accent);
+    color: var(--lavender);
+    background: rgba(61, 90, 254, 0.15);
   }
 </style>
