@@ -145,6 +145,7 @@ pub fn import_vrc_dolly_json(raw: &str, active_anchor: Option<Anchor>) -> Result
             local_pose,
             captured_at_ms: 0,
             transition: Transition::Smooth,
+            custom_curve: None,
             knot_mode: if idx == 0 || idx == last_idx {
                 KnotMode::Stop
             } else {

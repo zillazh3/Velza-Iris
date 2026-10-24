@@ -7,7 +7,7 @@ use super::kinematics::apply_organic_variation;
 use super::math3d::{
     dist3, forward_dir, lerp, lerp3, look_at_angles, right_dir, slerp_euler, wrap180, ArcLengthSegment, Quat,
 };
-use super::model::{EffectClip, EffectKind, Keyframe, KnotMode, SequenceProject, Transition};
+use super::model::{EffectClip, EffectKind, Keyframe, KnotMode, SequenceProject, TargetSourceKind, Transition};
 use crate::anchor::Anchor;
 use crate::osc::protocol::Pose;
 use serde::{Deserialize, Serialize};
@@ -112,7 +112,13 @@ fn eval_optical_channel(kfs: &[Keyframe], t: f32, extract: impl Fn(&Keyframe) ->
 fn eval_segment_progress(kfs: &[Keyframe], seg: usize, raw_u: f32) -> f32 {
     let raw_u = raw_u.clamp(0.0, 1.0);
     let n = kfs.len();
-    let trans = kfs[seg + 1].transition;
+    let next_kf = &kfs[seg + 1];
+
+    if let Some([x1, y1, x2, y2]) = next_kf.custom_curve {
+        return crate::studio::model::sample_cubic_bezier(raw_u, x1, y1, x2, y2);
+    }
+
+    let trans = next_kf.transition;
     if trans == Transition::Linear {
         return raw_u;
     }
@@ -201,7 +207,11 @@ fn apply_effect_clip(
 
     let local_t = t - clip.start_time;
     let raw_u = (local_t / clip.duration).clamp(0.0, 1.0);
-    let u = clip.easing.apply(raw_u);
+    let u = if let Some([x1, y1, x2, y2]) = clip.custom_curve {
+        crate::studio::model::sample_cubic_bezier(raw_u, x1, y1, x2, y2)
+    } else {
+        clip.easing.apply(raw_u)
+    };
     // Envolvente suave para microefectos temporales (evita saltos al entrar/salir del clip).
     // Nota: en f32, sin(PI * 1.0) es ~ -8.74e-8, por lo que .max(0.0) es indispensable antes de .powf(0.35) para evitar NaN.
     let env = (PI * raw_u).sin().max(0.0).powf(0.35);
@@ -339,6 +349,7 @@ fn evaluate_uncalibrated_at(
     world_poses: &[Pose],
     effects: &[EffectClip],
     pivot: [f32; 3],
+    effective_anchor: Option<&Anchor>,
     t: f32,
 ) -> (Pose, Pose, Option<f32>, Option<f32>, Option<f32>, Option<f32>) {
     let base_pose = eval_base_pose(kfs, world_poses, t);
@@ -364,9 +375,14 @@ fn evaluate_uncalibrated_at(
     // Variación orgánica reproducible del perfil cinematográfico (si aplica)
     apply_organic_variation(&mut final_pose, t, &project.cinematic);
 
-    // Seguimiento de objetivo opcional (`TargetProvider` calibrado)
+    // Seguimiento de objetivo opcional (`TargetProvider` calibrado).
+    // Si la fuente es `CalibratedAnchor`, resuelve dinámicamente hacia el ancla activa del operador local.
     if let Some(tg) = project.target.filter(|tg| tg.enabled) {
-        let [target_pitch, target_yaw] = look_at_angles(final_pose.pos, tg.world_pos);
+        let target_pos = match tg.source {
+            TargetSourceKind::CalibratedAnchor => effective_anchor.map(|a| a.eye).unwrap_or(tg.world_pos),
+            _ => tg.world_pos,
+        };
+        let [target_pitch, target_yaw] = look_at_angles(final_pose.pos, target_pos);
         let target_rot = [target_pitch, target_yaw, final_pose.rot[2]];
         final_pose.rot = slerp_euler(final_pose.rot, target_rot, tg.blend.clamp(0.0, 1.0));
     }
@@ -383,13 +399,13 @@ pub fn evaluate(project: &SequenceProject, active_anchor: Option<&Anchor>, t: f3
 
     let scale = project.trajectory_scale;
     let fallback_anchor = project.anchor_snapshot.as_ref();
+    let eff_anchor = active_anchor.or(fallback_anchor);
     let world_poses: Vec<Pose> = kfs
         .iter()
         .map(|k| k.world_pose(project.space, active_anchor, fallback_anchor, scale))
         .collect();
 
-    let pivot = active_anchor
-        .or(fallback_anchor)
+    let pivot = eff_anchor
         .map(|a| a.eye)
         .or_else(|| project.target.map(|tg| tg.world_pos))
         .unwrap_or([0.0, 1.6, 0.0]);
@@ -403,15 +419,17 @@ pub fn evaluate(project: &SequenceProject, active_anchor: Option<&Anchor>, t: f3
     });
 
     let (base_pose, uncal_final, zoom, exposure, focal_distance, aperture) =
-        evaluate_uncalibrated_at(project, &kfs, &world_poses, &effects, pivot, t);
+        evaluate_uncalibrated_at(project, &kfs, &world_poses, &effects, pivot, eff_anchor, t);
 
     // Derivada numérica centrada para rapidez lineal, angular y velocidad lateral (lead room)
     let eps = 0.01_f32;
     let t_prev = (t - eps).clamp(0.0, dur);
     let t_next = (t + eps).clamp(0.0, dur);
     let dt_span = (t_next - t_prev).max(1e-4);
-    let (_, pose_prev, _, _, _, _) = evaluate_uncalibrated_at(project, &kfs, &world_poses, &effects, pivot, t_prev);
-    let (_, pose_next, _, _, _, _) = evaluate_uncalibrated_at(project, &kfs, &world_poses, &effects, pivot, t_next);
+    let (_, pose_prev, _, _, _, _) =
+        evaluate_uncalibrated_at(project, &kfs, &world_poses, &effects, pivot, eff_anchor, t_prev);
+    let (_, pose_next, _, _, _, _) =
+        evaluate_uncalibrated_at(project, &kfs, &world_poses, &effects, pivot, eff_anchor, t_next);
 
     let linear_speed_mps = {
         let s = dist3(pose_prev.pos, pose_next.pos) / dt_span;
@@ -506,7 +524,10 @@ pub fn sample_trajectory(project: &SequenceProject, active_anchor: Option<&Ancho
         total_distance,
         anchor_pos: eff_anchor.map(|a| a.eye),
         anchor_yaw: eff_anchor.map(|a| a.yaw),
-        target_pos: project.target.filter(|t| t.enabled).map(|t| t.world_pos),
+        target_pos: project.target.filter(|t| t.enabled).map(|t| match t.source {
+            TargetSourceKind::CalibratedAnchor => eff_anchor.map(|a| a.eye).unwrap_or(t.world_pos),
+            _ => t.world_pos,
+        }),
     }
 }
 
@@ -524,6 +545,7 @@ mod tests {
             local_pose: None,
             captured_at_ms: 0,
             transition: Transition::Linear,
+            custom_curve: None,
             knot_mode: KnotMode::PassThrough,
             look: LookTrackPoint::default(),
         }
@@ -597,6 +619,7 @@ mod tests {
             param_a: Some(40.0),
             param_b: Some(80.0),
             easing: Transition::Linear,
+            custom_curve: None,
             enabled: true,
         });
         p.effects.push(EffectClip {
@@ -610,6 +633,7 @@ mod tests {
             param_a: None,
             param_b: None,
             easing: Transition::Linear,
+            custom_curve: None,
             enabled: true,
         });
 
@@ -667,6 +691,7 @@ mod tests {
                 param_a: None,
                 param_b: None,
                 easing: Transition::Smooth,
+                custom_curve: None,
                 enabled: true,
             });
 
@@ -682,5 +707,36 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn calibrated_anchor_target_tracks_operator_anchor_dynamically() {
+        use crate::studio::model::TargetConfig;
+
+        let mut p = SequenceProject::new("test-anchor-target", "Anchor Tracking", 5.0);
+        p.space = ReferenceSpace::World;
+        p.keyframes.push(make_kf("A", 0.0, [0.0, 1.65, 2.0], 0.0));
+        // Aunque `world_pos` tenga una coordenada residual antigua de otro lugar ([-50, 0, 50]),
+        // cuando `source == CalibratedAnchor`, debe mirar siempre al `active_anchor` del operador local.
+        p.target = Some(TargetConfig {
+            enabled: true,
+            source: TargetSourceKind::CalibratedAnchor,
+            world_pos: [-50.0, 0.0, 50.0],
+            blend: 1.0,
+            confidence: 1.0,
+            captured_at_ms: 0,
+        });
+
+        let operator_anchor = Anchor {
+            eye: [0.0, 1.65, 0.0],
+            yaw: 0.0,
+        };
+        let ev = evaluate(&p, Some(&operator_anchor), 0.0);
+        // La cámara en (0, 1.65, 2) mirando al operador en (0, 1.65, 0) debe tener yaw = 180° (o -180°) y pitch = 0°
+        assert!(ev.final_pose.rot[0].abs() < 1e-3);
+        assert!((ev.final_pose.rot[1].abs() - 180.0).abs() < 1e-2);
+
+        let prev = sample_trajectory(&p, Some(&operator_anchor), 16);
+        assert_eq!(prev.target_pos, Some(operator_anchor.eye));
     }
 }

@@ -124,6 +124,7 @@ pub fn simplify_recording_to_keyframes(
             local_pose: anchor.map(|a| a.world_to_local(&sample.pose)),
             captured_at_ms: 0,
             transition: Transition::Smooth,
+            custom_curve: None,
             knot_mode: if is_endpoint { KnotMode::Stop } else { KnotMode::PassThrough },
             look: LookTrackPoint {
                 zoom: sample.zoom,

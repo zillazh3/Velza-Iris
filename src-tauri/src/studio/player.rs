@@ -339,6 +339,7 @@ mod tests {
             local_pose: None,
             captured_at_ms: 0,
             transition: Transition::Linear,
+            custom_curve: None,
             knot_mode: KnotMode::Stop,
             look: LookTrackPoint::default(),
         });
@@ -350,6 +351,7 @@ mod tests {
             local_pose: None,
             captured_at_ms: 0,
             transition: Transition::Linear,
+            custom_curve: None,
             knot_mode: KnotMode::Stop,
             look: LookTrackPoint::default(),
         });

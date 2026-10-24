@@ -10,8 +10,44 @@ export type Anchor = {
   yaw: number;
 };
 
+export type AnchorLifecycleState =
+  | "inactive"
+  | "acquiring"
+  | "active"
+  | "syncLost"
+  | "recovering"
+  | "released";
+
+export type AnchorProvenance = "autoOnActivation" | "operatorCalibrated";
+
+export type SyncLossCause = "transientModeZero" | "oscDisconnected" | "packetTimeout";
+
+export type AnchorAuditEntry = {
+  timestampMs: number;
+  fromState: AnchorLifecycleState;
+  toState: AnchorLifecycleState;
+  mode: number;
+  reason: string;
+};
+
+export type AnchorSnapshot = {
+  state: AnchorLifecycleState;
+  anchor: Anchor | null;
+  provenance: AnchorProvenance | null;
+  cameraMode: number;
+  lastActiveMode: number;
+  acquisitionSeq: number;
+  modeSwitchCount: number;
+  syncLossCount: number;
+  recoveryCount: number;
+  lookAtMeActive: boolean;
+  syncLossCause: SyncLossCause | null;
+  auditLog: AnchorAuditEntry[];
+};
+
 export type CameraSnapshot = {
   open: boolean;
+  mode?: number;
   rxAvailable?: boolean;
   pose: Pose | null;
   poseFresh: boolean;
@@ -70,6 +106,7 @@ export type Status = {
   open: boolean;
   anchored: boolean;
   anchor: Anchor | null;
+  anchorState?: AnchorSnapshot;
   camera: CameraSnapshot | null;
 };
 
@@ -149,6 +186,7 @@ export type Keyframe = {
   localPose: Pose | null;
   capturedAtMs: number;
   transition: Transition;
+  customCurve?: [number, number, number, number];
   knotMode?: KnotMode;
   look: LookTrackPoint;
 };
@@ -184,6 +222,7 @@ export type EffectClip = {
   paramA: number | null;
   paramB: number | null;
   easing: Transition;
+  customCurve?: [number, number, number, number];
   enabled: boolean;
 };
 
