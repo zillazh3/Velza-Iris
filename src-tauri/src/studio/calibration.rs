@@ -571,15 +571,8 @@ mod tests {
 
         let closed_snap = CameraSnapshot {
             open: false,
-            rx_available: true,
-            pose: None,
-            pose_fresh: false,
-            pose_seq: 0,
-            pose_epoch_ms: None,
             zoom: Some(45.0),
-            exposure: None,
-            focal_distance: None,
-            aperture: None,
+            ..Default::default()
         };
         let rep_closed = rt.observe_and_update(Some(&closed_snap), 1000, 0.016, &cfg, 45.0, 0.0);
         assert!(matches!(rep_closed.certainty, DataCertainty::Unknown { .. }));
@@ -611,15 +604,12 @@ mod tests {
             };
             let snap = CameraSnapshot {
                 open: true,
-                rx_available: true,
                 pose: Some(observed),
                 pose_fresh: true,
                 pose_seq: step + 1,
                 pose_epoch_ms: Some(now_ms),
                 zoom: Some(45.0),
-                exposure: None,
-                focal_distance: None,
-                aperture: None,
+                ..Default::default()
             };
             let rep = rt.observe_and_update(Some(&snap), now_ms, 0.016, &cfg, 45.0, 0.0);
             assert!(matches!(rep.certainty, DataCertainty::Measured { .. }));
@@ -644,15 +634,12 @@ mod tests {
         // El usuario agarró la cámara en VR y la movió a 3 metros de distancia
         let grabbed_snap = CameraSnapshot {
             open: true,
-            rx_available: true,
             pose: Some(Pose { pos: [3.0, 1.6, 2.0], rot: [0.0, 180.0, 0.0] }),
             pose_fresh: true,
             pose_seq: 1,
             pose_epoch_ms: Some(1085),
             zoom: Some(45.0),
-            exposure: None,
-            focal_distance: None,
-            aperture: None,
+            ..Default::default()
         };
         let rep = rt.observe_and_update(Some(&grabbed_snap), 1085, 0.016, &cfg, 45.0, 0.0);
         assert!(matches!(rep.loop_mode, ControlLoopMode::OpenLoop { .. }));

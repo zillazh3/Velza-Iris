@@ -16,6 +16,7 @@ pub fn run() {
             commands::status,
             commands::calibrate,
             commands::reset_defaults,
+            commands::set_camera_toggle,
             commands::list_presets,
             commands::apply_preset,
             commands::save_user_preset,

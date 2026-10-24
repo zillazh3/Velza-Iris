@@ -64,13 +64,14 @@ pub struct StudioRunner {
 }
 
 fn sleep_until(deadline: Instant) {
-    if let Some(d) = deadline.checked_duration_since(Instant::now()) {
-        if d > Duration::from_millis(2) {
-            std::thread::sleep(d - Duration::from_millis(2));
+    while let Some(d) = deadline.checked_duration_since(Instant::now()) {
+        if d > Duration::from_millis(1) {
+            std::thread::sleep(Duration::from_millis(1));
+        } else if d > Duration::from_micros(80) {
+            std::thread::yield_now();
+        } else {
+            std::hint::spin_loop();
         }
-    }
-    while Instant::now() < deadline {
-        std::hint::spin_loop();
     }
 }
 

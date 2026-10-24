@@ -39,6 +39,7 @@ pub struct App {
     last: Mutex<Option<Preset>>,
     /// Movimiento paramétrico en curso; soltarlo (`None`) detiene el hilo.
     runner: Mutex<Option<Runner>>,
+    motion_prev_opts: Mutex<Option<Vec<(&'static str, Value)>>>,
     /// Reproductor de secuencias de Iris Studio; soltarlo (`None`) detiene el hilo.
     studio_runner: Mutex<Option<StudioRunner>>,
     /// Grabación continua de recorrido en curso.
@@ -56,6 +57,7 @@ impl App {
             anchor: Mutex::default(),
             last: Mutex::default(),
             runner: Mutex::default(),
+            motion_prev_opts: Mutex::default(),
             studio_runner: Mutex::default(),
             recording: Mutex::default(),
             turnaround: Mutex::default(),
@@ -71,6 +73,13 @@ impl App {
         *self.turnaround.lock().unwrap() = None;
         if let Some(rec) = self.recording.lock().unwrap().take() {
             rec.stop.store(true, Ordering::Relaxed);
+        }
+        if let Some(prev) = self.motion_prev_opts.lock().unwrap().take() {
+            if let Some(cam) = self.camera.lock().unwrap().as_ref() {
+                for (n, v) in prev {
+                    let _ = cam.set(n, v);
+                }
+            }
         }
     }
 
@@ -182,6 +191,14 @@ pub fn reset_defaults(st: State<App>) -> Result<(), String> {
     Ok(())
 }
 
+/// Conmuta un toggle booleano de la cámara de VRChat (p. ej. "Streaming", "LookAtMe", "SmoothMovement").
+#[tauri::command]
+pub fn set_camera_toggle(name: String, enabled: bool, st: State<App>) -> Result<(), String> {
+    let cam = st.camera.lock().unwrap();
+    let cam = cam.as_ref().ok_or("sin conexión con VRChat")?;
+    cam.set(&name, Value::B(enabled))
+}
+
 #[tauri::command]
 pub fn list_presets(st: State<App>) -> Library {
     st.library()
@@ -237,23 +254,31 @@ pub fn list_motions() -> Vec<Motion> {
     motions()
 }
 
-/// Reproduce un movimiento sobre el ancla. Activa LookAtMe y SmoothMovement (fuerza 7) y los deja así.
+/// Reproduce un movimiento sobre el ancla. Activa LookAtMe y SmoothMovement (fuerza 7) mientras reproduce y restaura al parar.
 #[tauri::command]
 pub fn play_motion(name: String, app: AppHandle, st: State<App>) -> Result<(), String> {
     let motion = motions().into_iter().find(|m| m.name == name).ok_or("el movimiento no existe")?;
     *st.turnaround.lock().unwrap() = None;
     *st.studio_runner.lock().unwrap() = None;
     let anchor = (*st.anchor.lock().unwrap()).ok_or("sin ancla: calibra primero")?;
-    {
+    let prev = {
         let cam = st.camera.lock().unwrap();
         let cam = cam.as_ref().ok_or("sin conexión con VRChat")?;
-        if !cam.state.lock().unwrap().open {
+        let state = cam.state.lock().unwrap();
+        if !state.open {
             return Err("cámara cerrada: ábrela en VRChat".into());
         }
+        let opts = ["LookAtMe", "SmoothMovement", "SmoothingStrength"].map(|n| {
+            let default = DEFAULTS.iter().find(|(k, _)| *k == n).map(|(_, v)| *v).unwrap();
+            (n, state.values.get(n).copied().unwrap_or(default))
+        });
+        drop(state);
         for (n, v) in [("LookAtMe", Value::B(true)), ("SmoothMovement", Value::B(true)), ("SmoothingStrength", Value::F(7.0))] {
             cam.set(n, v)?;
         }
-    }
+        opts.to_vec()
+    };
+    *st.motion_prev_opts.lock().unwrap() = Some(prev);
     let mut slot = st.runner.lock().unwrap();
     *slot = None;
     *slot = Some(Runner::start(motion, move |o: &Output| {
