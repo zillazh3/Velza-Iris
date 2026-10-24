@@ -1,4 +1,5 @@
 //! Cliente OSC hacia VRChat: envío con clamps y recepción de ecos en un hilo.
+//! Soporta degradación limpia a modo de Control Abierto (`rx_bound = false`) si el puerto UDP 9001 está ocupado.
 pub mod protocol;
 pub mod query;
 
@@ -7,11 +8,14 @@ use rosc::{decoder, encoder, OscMessage, OscPacket};
 use std::net::{SocketAddr, UdpSocket};
 
 /// Puerto en el que VRChat envía por defecto.
-const LISTEN_PORT: u16 = 9001;
+pub const DEFAULT_LISTEN_PORT: u16 = 9001;
 
 pub struct Osc {
     tx: UdpSocket,
     target: SocketAddr,
+    /// `true` si pudimos abrir el socket UDP de recepción de ecos; `false` si operamos en lazo abierto.
+    pub rx_bound: bool,
+    pub listen_port: u16,
 }
 
 fn flatten(p: OscPacket, out: &mut Vec<OscMessage>) {
@@ -22,21 +26,39 @@ fn flatten(p: OscPacket, out: &mut Vec<OscMessage>) {
 }
 
 impl Osc {
-    /// Abre el UDP 9001 y llama `on_msg` por cada mensaje recibido (desde otro hilo).
-    pub fn start(target: SocketAddr, mut on_msg: impl FnMut(OscMessage) + Send + 'static) -> Result<Osc, String> {
-        let rx = UdpSocket::bind(("127.0.0.1", LISTEN_PORT))
-            .map_err(|e| format!("no pude abrir UDP {LISTEN_PORT} ({e}); ¿otra app OSC lo usa?"))?;
+    /// Abre el puerto UDP por defecto (9001) y llama `on_msg` por cada mensaje recibido.
+    /// Si otra aplicación OSC ya ocupa el puerto 9001, continúa en modo Control Abierto (`rx_bound = false`).
+    pub fn start(target: SocketAddr, on_msg: impl FnMut(OscMessage) + Send + 'static) -> Result<Osc, String> {
+        Self::start_with_port(target, DEFAULT_LISTEN_PORT, on_msg)
+    }
+
+    pub fn start_with_port(
+        target: SocketAddr,
+        listen_port: u16,
+        mut on_msg: impl FnMut(OscMessage) + Send + 'static,
+    ) -> Result<Osc, String> {
         let tx = UdpSocket::bind("127.0.0.1:0").map_err(|e| e.to_string())?;
-        std::thread::spawn(move || {
-            let mut buf = [0u8; 65536];
-            while let Ok(n) = rx.recv(&mut buf) {
-                let Ok((_, pkt)) = decoder::decode_udp(&buf[..n]) else { continue };
-                let mut msgs = Vec::new();
-                flatten(pkt, &mut msgs);
-                msgs.into_iter().for_each(&mut on_msg);
+        let rx_bound = match UdpSocket::bind(("127.0.0.1", listen_port)) {
+            Ok(rx) => {
+                std::thread::spawn(move || {
+                    let mut buf = [0u8; 65536];
+                    while let Ok(n) = rx.recv(&mut buf) {
+                        let Ok((_, pkt)) = decoder::decode_udp(&buf[..n]) else { continue };
+                        let mut msgs = Vec::new();
+                        flatten(pkt, &mut msgs);
+                        msgs.into_iter().for_each(&mut on_msg);
+                    }
+                });
+                true
             }
-        });
-        Ok(Osc { tx, target })
+            Err(_) => false,
+        };
+        Ok(Osc {
+            tx,
+            target,
+            rx_bound,
+            listen_port,
+        })
     }
 
     fn send(&self, addr: String, args: Vec<rosc::OscType>) -> Result<(), String> {
@@ -52,5 +74,21 @@ impl Osc {
 
     pub fn pose(&self, pose: &Pose) -> Result<(), String> {
         self.send(Pose::ADDR.into(), pose.to_args()?)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn falls_back_to_open_loop_when_listen_port_is_busy() {
+        let blocker = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let busy_port = blocker.local_addr().unwrap().port();
+        let target: SocketAddr = "127.0.0.1:9000".parse().unwrap();
+
+        let osc = Osc::start_with_port(target, busy_port, |_| {}).unwrap();
+        assert!(!osc.rx_bound, "debe degradar a modo abierto si el puerto está ocupado");
+        assert_eq!(osc.listen_port, busy_port);
     }
 }

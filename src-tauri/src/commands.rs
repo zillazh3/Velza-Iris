@@ -1,6 +1,6 @@
-//! Comandos Tauri: puente entre la UI y camera/anchor/presets.
+//! Comandos Tauri: puente entre la UI y camera/anchor/presets/studio.
 use crate::anchor::Anchor;
-use crate::camera::{Camera, Change, DEFAULTS};
+use crate::camera::{Camera, CameraSnapshot, Change, DEFAULTS};
 use crate::motion::runner::{Cmd, Output, PlayState, Runner};
 use crate::motion::sample::{motions, Motion};
 use crate::motion::turnaround::{self, Action, Progress, Timing, Turnaround};
@@ -8,20 +8,44 @@ use crate::osc::protocol::Value;
 use crate::osc::query;
 use crate::presets::{self, Preset};
 use crate::storage;
+use crate::studio::calibration::{CalibrationRuntime, TelemetryReport};
+use crate::studio::dolly::{export_vrc_dolly_json, import_vrc_dolly_json};
+use crate::studio::evaluator::{evaluate, sample_trajectory, EvaluatedFrame, TrajectoryPreview};
+use crate::studio::math3d::wrap180;
+use crate::studio::model::{
+    point_label, Keyframe, KnotMode, LookTrackPoint, RecordedSample, SequenceProject, TargetConfig, TargetSourceKind,
+    Transition,
+};
+use crate::studio::player::{StudioCmd, StudioPlaybackStatus, StudioRunner};
+use crate::studio::recorder::simplify_recording_to_keyframes;
+use crate::studio::{delete_sequence, import_sequence_json, load_sequences, save_sequence};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use std::sync::Mutex;
-use std::time::Duration;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager, State};
+
+pub struct ActiveRecording {
+    stop: Arc<AtomicBool>,
+    samples: Arc<Mutex<Vec<RecordedSample>>>,
+    started_at: Instant,
+}
 
 pub struct App {
     camera: Mutex<Option<Camera>>,
     anchor: Mutex<Option<Anchor>>,
     /// Último preset estático aplicado; se reaplica cuando el usuario reabre la cámara.
     last: Mutex<Option<Preset>>,
-    /// Movimiento en curso; soltarlo (`None`) detiene el hilo.
+    /// Movimiento paramétrico en curso; soltarlo (`None`) detiene el hilo.
     runner: Mutex<Option<Runner>>,
+    /// Reproductor de secuencias de Iris Studio; soltarlo (`None`) detiene el hilo.
+    studio_runner: Mutex<Option<StudioRunner>>,
+    /// Grabación continua de recorrido en curso.
+    recording: Mutex<Option<ActiveRecording>>,
     turnaround: Mutex<Option<Turnaround>>,
+    /// Estado dinámico de telemetría y calibración adaptativa (separado de los datos persistentes del proyecto).
+    calibration_rt: Mutex<CalibrationRuntime>,
     data: Result<PathBuf, String>,
 }
 
@@ -32,15 +56,22 @@ impl App {
             anchor: Mutex::default(),
             last: Mutex::default(),
             runner: Mutex::default(),
+            studio_runner: Mutex::default(),
+            recording: Mutex::default(),
             turnaround: Mutex::default(),
+            calibration_rt: Mutex::default(),
             data: storage::data_dir(false),
         }
     }
 
-    /// Detiene movimiento y turnaround (este último restaura sus ajustes). No llamar con el lock de `camera` tomado.
+    /// Detiene movimiento, reproducción de Studio y turnaround. No llamar con el lock de `camera` tomado.
     fn halt(&self) {
         *self.runner.lock().unwrap() = None;
+        *self.studio_runner.lock().unwrap() = None;
         *self.turnaround.lock().unwrap() = None;
+        if let Some(rec) = self.recording.lock().unwrap().take() {
+            rec.stop.store(true, Ordering::Relaxed);
+        }
     }
 
     fn library(&self) -> Library {
@@ -76,6 +107,8 @@ pub struct Status {
     connected: bool,
     open: bool,
     anchored: bool,
+    anchor: Option<Anchor>,
+    camera: Option<CameraSnapshot>,
 }
 
 /// Reaplica el último preset tras abrirse la cámara (en otro hilo para no frenar la recepción OSC).
@@ -112,8 +145,19 @@ pub async fn connect(app: AppHandle, st: State<'_, App>) -> Result<(), String> {
 
 #[tauri::command]
 pub fn status(st: State<App>) -> Status {
-    let open = st.camera.lock().unwrap().as_ref().is_some_and(|c| c.state.lock().unwrap().open);
-    Status { connected: st.camera.lock().unwrap().is_some(), open, anchored: st.anchor.lock().unwrap().is_some() }
+    let cam_guard = st.camera.lock().unwrap();
+    let connected = cam_guard.is_some();
+    let camera = cam_guard.as_ref().map(|c| c.state.lock().unwrap().snapshot());
+    let open = camera.as_ref().is_some_and(|s| s.open);
+    drop(cam_guard);
+    let anchor = *st.anchor.lock().unwrap();
+    Status {
+        connected,
+        open,
+        anchored: anchor.is_some(),
+        anchor,
+        camera,
+    }
 }
 
 /// Toma la pose actual de la cámara (cerca de la cara, mirando al frente) como origen de los presets.
@@ -154,6 +198,20 @@ pub fn apply_preset(name: String, st: State<App>) -> Result<(), String> {
     Ok(())
 }
 
+#[tauri::command]
+pub fn save_user_preset(preset: Preset, st: State<App>) -> Result<(), String> {
+    let dir = st.data.as_ref().map_err(|e| e.clone())?.join("presets");
+    presets::save(&dir, &preset)
+}
+
+#[tauri::command]
+pub fn import_preset_json(raw: String, st: State<App>) -> Result<Preset, String> {
+    let (preset, _) = Preset::from_json(&raw)?;
+    let dir = st.data.as_ref().map_err(|e| e.clone())?.join("presets");
+    presets::save(&dir, &preset)?;
+    Ok(preset)
+}
+
 // ---------- movimiento ----------
 
 #[derive(Serialize)]
@@ -180,11 +238,11 @@ pub fn list_motions() -> Vec<Motion> {
 }
 
 /// Reproduce un movimiento sobre el ancla. Activa LookAtMe y SmoothMovement (fuerza 7) y los deja así.
-// ponytail: no restaura LookAtMe/smoothing al terminar; "Restablecer" los devuelve a los valores de VRChat.
 #[tauri::command]
 pub fn play_motion(name: String, app: AppHandle, st: State<App>) -> Result<(), String> {
     let motion = motions().into_iter().find(|m| m.name == name).ok_or("el movimiento no existe")?;
-    *st.turnaround.lock().unwrap() = None; // restaura sus ajustes antes de que play_motion fije los suyos
+    *st.turnaround.lock().unwrap() = None;
+    *st.studio_runner.lock().unwrap() = None;
     let anchor = (*st.anchor.lock().unwrap()).ok_or("sin ancla: calibra primero")?;
     {
         let cam = st.camera.lock().unwrap();
@@ -197,7 +255,7 @@ pub fn play_motion(name: String, app: AppHandle, st: State<App>) -> Result<(), S
         }
     }
     let mut slot = st.runner.lock().unwrap();
-    *slot = None; // detiene (y espera) al anterior antes de arrancar el nuevo
+    *slot = None;
     *slot = Some(Runner::start(motion, move |o: &Output| {
         let st = app.state::<App>();
         let cam = st.camera.lock().unwrap();
@@ -257,8 +315,7 @@ pub fn panic_stop(st: State<App>) -> Result<(), String> {
     last.map_or(Ok(()), |p| st.apply(&p))
 }
 
-/// Turnaround: 8 paradas cada 45° (o 4 vistas) con captura. Apaga jugadores remotos y entorno, enciende GreenScreen
-/// y al terminar, detenerlo o fallar restaura esos toggles, SmoothMovement y LookAtMe.
+/// Turnaround: 8 paradas cada 45° (o 4 vistas) con captura.
 #[tauri::command]
 pub fn start_turnaround(four_views: bool, app: AppHandle, st: State<App>) -> Result<(), String> {
     st.halt();
@@ -271,7 +328,7 @@ pub fn start_turnaround(four_views: bool, app: AppHandle, st: State<App>) -> Res
             if !state.open {
                 return Err("cámara cerrada: ábrela en VRChat".into());
             }
-            ["RemotePlayer", "Environment", "GreenScreen", "SmoothMovement", "LookAtMe"].map(|n| {
+            ["RemotePlayer", "Environment", "GreenScreen", "SmoothMovement", "LookAtMe", "LookAtMeYOffset"].map(|n| {
                 let default = DEFAULTS.iter().find(|(k, _)| *k == n).map(|(_, v)| *v).unwrap();
                 (n, state.values.get(n).copied().unwrap_or(default))
             })
@@ -280,9 +337,10 @@ pub fn start_turnaround(four_views: bool, app: AppHandle, st: State<App>) -> Res
             ("RemotePlayer", Value::B(false)),
             ("Environment", Value::B(false)),
             ("GreenScreen", Value::B(true)),
-            ("SmoothMovement", Value::B(false)), // con saltos entre paradas, el suavizado cruzaría por el avatar
+            ("SmoothMovement", Value::B(false)),
             ("LookAtMe", Value::B(true)),
-            ("Zoom", Value::F(45.0)), // mm (≈30° de FOV vertical)
+            ("LookAtMeYOffset", Value::F(turnaround::look_at_y_offset())),
+            ("Zoom", Value::F(turnaround::ZOOM)),
             ("FocalDistance", Value::F(turnaround::DISTANCE)),
             ("Aperture", Value::F(11.0)),
         ];
@@ -304,7 +362,6 @@ pub fn start_turnaround(four_views: bool, app: AppHandle, st: State<App>) -> Res
                 Action::Capture => cam.set("Capture", Value::B(true)),
             }
         },
-        // Restaurar es de mejor esfuerzo: si la cámara se cerró, no hay nada que restaurar.
         move || {
             if let Some(cam) = done.state::<App>().camera.lock().unwrap().as_ref() {
                 for (n, v) in prev {
@@ -321,3 +378,473 @@ pub fn start_turnaround(four_views: bool, app: AppHandle, st: State<App>) -> Res
 pub fn turnaround_status(st: State<App>) -> Option<Progress> {
     st.turnaround.lock().unwrap().as_ref().map(|t| t.progress())
 }
+
+// ---------- Iris Studio ----------
+
+/// Captura un Keyframe exacto desde la posición y rotación reales reportadas por la cámara de VRChat.
+/// Si no hay datos válidos/recientes desde que se abrió la cámara, devuelve un error explícito.
+#[tauri::command]
+pub fn capture_camera_point(
+    index: usize,
+    time: f32,
+    capture_optics: bool,
+    st: State<App>,
+) -> Result<Keyframe, String> {
+    let snap = {
+        let cam = st.camera.lock().unwrap();
+        let cam = cam.as_ref().ok_or("No hay conexión activa con VRChat.")?;
+        cam.state.lock().unwrap().snapshot()
+    };
+    if !snap.open {
+        return Err("La cámara de VRChat está cerrada. Ábrela primero para capturar su posición.".into());
+    }
+    if !snap.pose_fresh {
+        return Err("Aún no recibimos la posición actual de tu cámara. Muévela ligeramente en VRChat e inténtalo de nuevo.".into());
+    }
+    let raw_pose = snap
+        .pose
+        .ok_or("No pudimos leer la posición actual de tu cámara. Muévela un poco en VRChat.")?;
+    let anchor = *st.anchor.lock().unwrap();
+    let local_pose = anchor.map(|a| a.world_to_local(&raw_pose));
+
+    Ok(Keyframe {
+        id: format!("kf-{}-{}", index + 1, snap.pose_seq),
+        label: point_label(index),
+        time: (time * 100.0).round() / 100.0,
+        raw_pose,
+        local_pose,
+        captured_at_ms: snap.pose_epoch_ms.unwrap_or(0),
+        transition: Transition::Smooth,
+        knot_mode: KnotMode::PassThrough,
+        look: if capture_optics {
+            LookTrackPoint {
+                zoom: snap.zoom,
+                exposure: snap.exposure,
+                focal_distance: snap.focal_distance,
+                aperture: snap.aperture,
+            }
+        } else {
+            LookTrackPoint::default()
+        },
+    })
+}
+
+/// Captura un punto de interés (`TargetConfig`) colocando la cámara de VRChat en el objetivo a encuadrar.
+#[tauri::command]
+pub fn capture_target_point(blend: f32, st: State<App>) -> Result<TargetConfig, String> {
+    let snap = {
+        let cam = st.camera.lock().unwrap();
+        let cam = cam.as_ref().ok_or("No hay conexión activa con VRChat.")?;
+        cam.state.lock().unwrap().snapshot()
+    };
+    if !snap.open {
+        return Err("La cámara de VRChat está cerrada. Ábrela primero para capturar el objetivo.".into());
+    }
+    if !snap.pose_fresh {
+        return Err("Mueve ligeramente tu cámara en VRChat sobre el objetivo para leer su posición.".into());
+    }
+    let raw_pose = snap
+        .pose
+        .ok_or("No pudimos leer la posición actual de tu cámara.")?;
+
+    Ok(TargetConfig {
+        enabled: true,
+        source: TargetSourceKind::StaticCalibratedPoint,
+        world_pos: raw_pose.pos,
+        blend: blend.clamp(0.0, 1.0),
+        confidence: 1.0,
+        captured_at_ms: snap.pose_epoch_ms.unwrap_or(0),
+    })
+}
+
+/// Evalúa la secuencia en un instante `time` (p. ej. al arrastrar el cursor) y opcionalmente envía la pose a VRChat.
+#[tauri::command]
+pub fn evaluate_sequence(
+    project: SequenceProject,
+    time: f32,
+    send_to_camera: bool,
+    st: State<App>,
+) -> Result<EvaluatedFrame, String> {
+    let anchor = *st.anchor.lock().unwrap();
+    // Si hay una secuencia reproduciéndose en vivo o en vista previa, sincronizar cualquier cambio de FX/puntos al instante
+    if let Some(runner) = st.studio_runner.lock().unwrap().as_ref() {
+        runner.send(StudioCmd::UpdateProject(project.clone(), anchor));
+    }
+    let frame = evaluate(&project, anchor.as_ref(), time);
+    if send_to_camera {
+        let cam_guard = st.camera.lock().unwrap();
+        if let Some(cam) = cam_guard.as_ref() {
+            if cam.state.lock().unwrap().open {
+                let _ = cam.set("LookAtMe", Value::B(false));
+                let _ = cam.pose(&frame.final_pose);
+                if let Some(z) = frame.zoom {
+                    let _ = cam.set("Zoom", Value::F(z));
+                }
+                if let Some(e) = frame.exposure {
+                    let _ = cam.set("Exposure", Value::F(e));
+                }
+                if let Some(fd) = frame.focal_distance {
+                    let _ = cam.set("FocalDistance", Value::F(fd));
+                }
+                if let Some(ap) = frame.aperture {
+                    let _ = cam.set("Aperture", Value::F(ap));
+                }
+            }
+        }
+    }
+    Ok(frame)
+}
+
+/// Genera la vista previa espacial 3D de la secuencia (nodos, curvas base y con efectos, distancias y ancla).
+#[tauri::command]
+pub fn preview_trajectory(project: SequenceProject, steps: usize, st: State<App>) -> TrajectoryPreview {
+    let anchor = *st.anchor.lock().unwrap();
+    sample_trajectory(&project, anchor.as_ref(), steps)
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum StudioControlCmd {
+    Play,
+    Pause,
+    Seek(f32),
+    Loop(bool),
+    Speed(f32),
+}
+
+/// Inicia la reproducción de una secuencia de Iris Studio (en modo Vista Previa local o en Vivo hacia VRChat OSC).
+#[tauri::command]
+pub fn play_sequence(
+    project: SequenceProject,
+    start_time: f32,
+    looping: bool,
+    live_osc: bool,
+    app: AppHandle,
+    st: State<App>,
+) -> Result<(), String> {
+    if project.keyframes.is_empty() {
+        return Err("Agrega al menos un punto en la línea de tiempo antes de reproducir.".into());
+    }
+    st.halt();
+    let anchor = *st.anchor.lock().unwrap();
+    if live_osc {
+        let cam = st.camera.lock().unwrap();
+        let cam = cam.as_ref().ok_or("Conecta con VRChat antes de reproducir en la cámara, o usa Vista Previa.")?;
+        if !cam.state.lock().unwrap().open {
+            return Err("Abre la cámara en VRChat para reproducir en vivo, o usa Vista Previa.".into());
+        }
+        // Ajustamos SmoothMovement de VRChat según el Perfil Cinematográfico activo de Iris Studio
+        let (smooth_on, smooth_strength) = project.cinematic.vrchat_smoothing();
+        for (n, v) in [
+            ("LookAtMe", Value::B(false)),
+            ("SmoothMovement", Value::B(smooth_on)),
+            ("SmoothingStrength", Value::F(smooth_strength)),
+        ] {
+            cam.set(n, v)?;
+        }
+    }
+
+    let cal_cfg = project.calibration.clone();
+    let runner = StudioRunner::start(project, anchor, start_time, looping, live_osc, move |ev, send_osc| {
+        if !send_osc {
+            return Ok(());
+        }
+        let st = app.state::<App>();
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        let mut pose_to_send = ev.final_pose;
+        {
+            let mut cal = st.calibration_rt.lock().unwrap();
+            cal.record_sent_pose(now_ms, ev.final_pose);
+            if cal_cfg.enabled && cal_cfg.auto_correct {
+                for i in 0..3 {
+                    pose_to_send.pos[i] += cal.active_pos_correction[i];
+                }
+                pose_to_send.rot[0] = (pose_to_send.rot[0] + cal.active_rot_correction[0]).clamp(-89.9, 89.9);
+                pose_to_send.rot[1] = wrap180(pose_to_send.rot[1] + cal.active_rot_correction[1]);
+                pose_to_send.rot[2] = wrap180(pose_to_send.rot[2] + cal.active_rot_correction[2]);
+            }
+        }
+        let cam = st.camera.lock().unwrap();
+        let cam = cam.as_ref().ok_or("Se perdió la conexión con VRChat")?;
+        cam.pose(&pose_to_send)?;
+        if let Some(z) = ev.zoom {
+            cam.set("Zoom", Value::F(z))?;
+        }
+        if let Some(e) = ev.exposure {
+            cam.set("Exposure", Value::F(e))?;
+        }
+        if let Some(fd) = ev.focal_distance {
+            cam.set("FocalDistance", Value::F(fd))?;
+        }
+        if let Some(ap) = ev.aperture {
+            cam.set("Aperture", Value::F(ap))?;
+        }
+        Ok(())
+    });
+
+    *st.studio_runner.lock().unwrap() = Some(runner);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn studio_control(cmd: StudioControlCmd, st: State<App>) -> Result<(), String> {
+    let guard = st.studio_runner.lock().unwrap();
+    let r = guard.as_ref().ok_or("No hay secuencia reproduciéndose")?;
+    r.send(match cmd {
+        StudioControlCmd::Play => StudioCmd::Play,
+        StudioControlCmd::Pause => StudioCmd::Pause,
+        StudioControlCmd::Seek(t) => StudioCmd::Seek(t),
+        StudioControlCmd::Loop(on) => StudioCmd::Loop(on),
+        StudioControlCmd::Speed(s) => StudioCmd::Speed(s),
+    });
+    Ok(())
+}
+
+#[tauri::command]
+pub fn studio_status(st: State<App>) -> StudioPlaybackStatus {
+    st.studio_runner
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|r| r.status())
+        .unwrap_or_default()
+}
+
+#[tauri::command]
+pub fn stop_studio(st: State<App>) {
+    *st.studio_runner.lock().unwrap() = None;
+}
+
+// ---------- Grabación continua de recorrido ----------
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecordingStatus {
+    pub active: bool,
+    pub elapsed: f32,
+    pub sample_count: usize,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FinishedRecording {
+    pub duration: f32,
+    pub raw_samples: Vec<RecordedSample>,
+    pub keyframes: Vec<Keyframe>,
+}
+
+#[tauri::command]
+pub fn start_recording(app: AppHandle, st: State<App>) -> Result<(), String> {
+    st.halt();
+    {
+        let cam = st.camera.lock().unwrap();
+        let cam = cam.as_ref().ok_or("Conecta con VRChat antes de grabar un recorrido.")?;
+        let snap = cam.state.lock().unwrap().snapshot();
+        if !snap.open {
+            return Err("Abre la cámara en VRChat antes de iniciar la grabación.".into());
+        }
+    }
+
+    let stop = Arc::new(AtomicBool::new(false));
+    let samples = Arc::new(Mutex::new(Vec::<RecordedSample>::new()));
+    let started_at = Instant::now();
+
+    let stop_clone = stop.clone();
+    let samples_clone = samples.clone();
+    std::thread::spawn(move || {
+        let mut last_seq = 0_u64;
+        while !stop_clone.load(Ordering::Relaxed) {
+            {
+                let st = app.state::<App>();
+                let cam_guard = st.camera.lock().unwrap();
+                if let Some(cam) = cam_guard.as_ref() {
+                    let snap = cam.state.lock().unwrap().snapshot();
+                    if snap.open && snap.pose_fresh {
+                        if let Some(pose) = snap.pose {
+                            let mut buf = samples_clone.lock().unwrap();
+                            // Registrar en el primer instante o cada vez que VRChat emita un nuevo paquete Pose
+                            if buf.is_empty() || snap.pose_seq != last_seq {
+                                last_seq = snap.pose_seq;
+                                buf.push(RecordedSample {
+                                    time: started_at.elapsed().as_secs_f32(),
+                                    pose,
+                                    zoom: snap.zoom,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+            std::thread::sleep(Duration::from_millis(16));
+        }
+    });
+
+    *st.recording.lock().unwrap() = Some(ActiveRecording {
+        stop,
+        samples,
+        started_at,
+    });
+    Ok(())
+}
+
+#[tauri::command]
+pub fn recording_status(st: State<App>) -> RecordingStatus {
+    match st.recording.lock().unwrap().as_ref() {
+        Some(rec) => RecordingStatus {
+            active: true,
+            elapsed: rec.started_at.elapsed().as_secs_f32(),
+            sample_count: rec.samples.lock().unwrap().len(),
+        },
+        None => RecordingStatus {
+            active: false,
+            elapsed: 0.0,
+            sample_count: 0,
+        },
+    }
+}
+
+#[tauri::command]
+pub fn stop_recording(
+    pos_tol_m: f32,
+    rot_tol_deg: f32,
+    smoothing_passes: usize,
+    st: State<App>,
+) -> Result<FinishedRecording, String> {
+    let rec = st.recording.lock().unwrap().take().ok_or("No hay grabación activa")?;
+    rec.stop.store(true, Ordering::Relaxed);
+    let duration = rec.started_at.elapsed().as_secs_f32().max(1.0);
+    let raw_samples = rec.samples.lock().unwrap().clone();
+    if raw_samples.is_empty() {
+        return Err("No se recibieron movimientos de la cámara durante la grabación. Mueve la cámara en VRChat mientras grabas.".into());
+    }
+    let anchor = *st.anchor.lock().unwrap();
+    let keyframes = simplify_recording_to_keyframes(&raw_samples, anchor.as_ref(), pos_tol_m, rot_tol_deg, smoothing_passes);
+    Ok(FinishedRecording {
+        duration: (duration * 10.0).round() / 10.0,
+        raw_samples,
+        keyframes,
+    })
+}
+
+#[tauri::command]
+pub fn resimplify_recording(
+    raw_samples: Vec<RecordedSample>,
+    pos_tol_m: f32,
+    rot_tol_deg: f32,
+    smoothing_passes: usize,
+    st: State<App>,
+) -> Vec<Keyframe> {
+    let anchor = *st.anchor.lock().unwrap();
+    simplify_recording_to_keyframes(&raw_samples, anchor.as_ref(), pos_tol_m, rot_tol_deg, smoothing_passes)
+}
+
+// ---------- Persistencia de secuencias ----------
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SequenceLibrary {
+    pub sequences: Vec<SequenceProject>,
+    pub warnings: Vec<String>,
+}
+
+#[tauri::command]
+pub fn list_sequences(st: State<App>) -> SequenceLibrary {
+    match &st.data {
+        Ok(dir) => {
+            let (sequences, warnings) = load_sequences(&dir.join("sequences"));
+            SequenceLibrary { sequences, warnings }
+        }
+        Err(e) => SequenceLibrary {
+            sequences: crate::studio::starter_sequences(),
+            warnings: vec![e.clone()],
+        },
+    }
+}
+
+#[tauri::command]
+pub fn save_sequence_cmd(mut project: SequenceProject, st: State<App>) -> Result<SequenceProject, String> {
+    if let Some(anchor) = *st.anchor.lock().unwrap() {
+        if project.anchor_snapshot.is_none() {
+            project.bind_anchor(anchor);
+        }
+    }
+    project.sort_keyframes();
+    let dir = st.data.as_ref().map_err(|e| e.clone())?.join("sequences");
+    save_sequence(&dir, &project)?;
+    Ok(project)
+}
+
+#[tauri::command]
+pub fn delete_sequence_cmd(id: String, st: State<App>) -> Result<(), String> {
+    let dir = st.data.as_ref().map_err(|e| e.clone())?.join("sequences");
+    delete_sequence(&dir, &id)
+}
+
+#[tauri::command]
+pub fn import_sequence_cmd(raw: String, st: State<App>) -> Result<SequenceProject, String> {
+    let seq = import_sequence_json(&raw)?;
+    let dir = st.data.as_ref().map_err(|e| e.clone())?.join("sequences");
+    save_sequence(&dir, &seq)?;
+    Ok(seq)
+}
+
+// ---------- Calibración, Telemetría y Adaptador Camera Dolly ----------
+
+#[tauri::command]
+pub fn telemetry_status(project: SequenceProject, st: State<App>) -> TelemetryReport {
+    let snap = {
+        let cam_guard = st.camera.lock().unwrap();
+        cam_guard.as_ref().map(|c| c.state.lock().unwrap().snapshot())
+    };
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let zoom_mm = snap.as_ref().and_then(|s| s.zoom).unwrap_or(45.0);
+    let mut cal = st.calibration_rt.lock().unwrap();
+    cal.observe_and_update(snap.as_ref(), now_ms, 0.08, &project.calibration, zoom_mm, 0.0)
+}
+
+#[tauri::command]
+pub fn reset_calibration_cmd(st: State<App>) -> TelemetryReport {
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let mut cal = st.calibration_rt.lock().unwrap();
+    cal.reset(now_ms, "Restaurado manualmente por el usuario");
+    TelemetryReport::default()
+}
+
+/// Convierte un movimiento predefinido (`Motion`) en un `SequenceProject` editable para alternar entre Modo Simple y Avanzado.
+#[tauri::command]
+pub fn load_motion_as_sequence(name: String, st: State<App>) -> Result<SequenceProject, String> {
+    let motion = motions()
+        .into_iter()
+        .find(|m| m.name == name)
+        .ok_or("El movimiento predefinido solicitado no existe")?;
+    let anchor = *st.anchor.lock().unwrap();
+    Ok(SequenceProject::from_preset_motion(&motion, anchor))
+}
+
+/// Importa un archivo `.json` oficial de VRChat Camera Dolly hacia un `SequenceProject` reproducible sin VRC+.
+#[tauri::command]
+pub fn import_vrc_dolly_cmd(raw: String, st: State<App>) -> Result<SequenceProject, String> {
+    let anchor = *st.anchor.lock().unwrap();
+    let seq = import_vrc_dolly_json(&raw, anchor)?;
+    if let Ok(dir) = &st.data {
+        let _ = save_sequence(&dir.join("sequences"), &seq);
+    }
+    Ok(seq)
+}
+
+/// Exporta un `SequenceProject` al formato `.json` compatible con VRChat Camera Dolly.
+#[tauri::command]
+pub fn export_vrc_dolly_cmd(project: SequenceProject, bake_effects: bool, st: State<App>) -> Result<String, String> {
+    let anchor = *st.anchor.lock().unwrap();
+    export_vrc_dolly_json(&project, anchor.as_ref(), bake_effects)
+}
+

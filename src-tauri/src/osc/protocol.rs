@@ -81,7 +81,7 @@ pub fn encode(name: &str, value: Value) -> Result<(String, Vec<OscType>), String
 }
 
 /// Pose en mundo: posición en metros, rotación Euler en grados (pitch, yaw, roll).
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Pose {
     pub pos: [f32; 3],
     pub rot: [f32; 3],
@@ -103,14 +103,14 @@ impl Pose {
         Some(Pose { pos: [v[0], v[1], v[2]], rot: [wrap180(v[3]), wrap180(v[4]), wrap180(v[5])] })
     }
 
-    /// Pitch recortado a ±90° (más se reinterpreta como otro Euler, ver findings). Rechaza NaN/inf.
+    /// Pitch recortado a ±89.9° (en ±90° exactos o más VRChat/Unity reinterpreta el Euler, ver findings). Rechaza NaN/inf.
     pub fn to_args(&self) -> Result<Vec<OscType>, String> {
         let all = self.pos.iter().chain(&self.rot);
         if !all.clone().all(|v| v.is_finite()) {
             return Err("Pose con valores no finitos".into());
         }
         let [pitch, yaw, roll] = self.rot;
-        let rot = [wrap180(pitch).clamp(-90.0, 90.0), yaw, roll];
+        let rot = [wrap180(pitch).clamp(-89.9, 89.9), wrap180(yaw), wrap180(roll)];
         Ok(self.pos.iter().chain(&rot).map(|v| OscType::Float(*v)).collect())
     }
 }
@@ -145,7 +145,7 @@ mod tests {
     #[test]
     fn pose_pitch_limit_and_wrap() {
         let p = Pose { pos: [1.0, 1.5, 2.0], rot: [95.0, 90.0, 0.0] };
-        assert_eq!(p.to_args().unwrap()[3], OscType::Float(90.0));
+        assert_eq!(p.to_args().unwrap()[3], OscType::Float(89.9));
         // eco real de VRChat para pitch -10: 349.99997
         let echo: Vec<_> = [1.0, 1.5, 2.0, 349.99997, 270.0, 0.0].iter().map(|v| OscType::Float(*v)).collect();
         let q = Pose::from_args(&echo).unwrap();

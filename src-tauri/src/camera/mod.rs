@@ -2,9 +2,11 @@
 use crate::osc::protocol::{kind, Kind, Pose, Value};
 use crate::osc::Osc;
 use rosc::{OscMessage, OscType};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Change {
@@ -12,12 +14,73 @@ pub enum Change {
     Closed,
 }
 
-#[derive(Default)]
+/// Instantánea verificada del estado de cámara para captura de puntos y diagnóstico UI.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CameraSnapshot {
+    pub open: bool,
+    /// `true` si el puerto UDP 9001 está recibiendo ecos; `false` si opera en modo Control Abierto.
+    #[serde(default = "default_true")]
+    pub rx_available: bool,
+    pub pose: Option<Pose>,
+    /// `true` si llegó al menos una Pose desde la última vez que se abrió la cámara.
+    pub pose_fresh: bool,
+    /// Contador monótono de paquetes `/usercamera/Pose` recibidos.
+    pub pose_seq: u64,
+    /// Timestamp (ms epoch) del último paquete `Pose` recibido de VRChat.
+    pub pose_epoch_ms: Option<u64>,
+    pub zoom: Option<f32>,
+    pub exposure: Option<f32>,
+    pub focal_distance: Option<f32>,
+    pub aperture: Option<f32>,
+}
+
+fn default_true() -> bool {
+    true
+}
+
 pub struct State {
     pub open: bool,
+    pub rx_available: bool,
     pub pose: Option<Pose>,
+    pub pose_fresh: bool,
+    pub pose_seq: u64,
+    pub pose_epoch_ms: Option<u64>,
     /// Último valor visto por endpoint (eco de VRChat).
     pub values: HashMap<String, Value>,
+    /// Último valor enviado por endpoint para deduplicar tráfico óptico redundante a 60 Hz.
+    pub last_sent: HashMap<String, Value>,
+}
+
+impl Default for State {
+    fn default() -> Self {
+        State {
+            open: false,
+            rx_available: true,
+            pose: None,
+            pose_fresh: false,
+            pose_seq: 0,
+            pose_epoch_ms: None,
+            values: HashMap::new(),
+            last_sent: HashMap::new(),
+        }
+    }
+}
+
+fn values_close_enough(a: Value, b: Value) -> bool {
+    match (a, b) {
+        (Value::F(x), Value::F(y)) => (x - y).abs() < 1e-3,
+        (Value::I(x), Value::I(y)) => x == y,
+        (Value::B(x), Value::B(y)) => x == y,
+        _ => false,
+    }
+}
+
+fn now_epoch_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 impl State {
@@ -27,6 +90,9 @@ impl State {
         let name = m.addr.strip_prefix("/usercamera/")?;
         let open = if name == "Pose" {
             self.pose = Some(Pose::from_args(&m.args)?);
+            self.pose_fresh = true;
+            self.pose_seq = self.pose_seq.wrapping_add(1);
+            self.pose_epoch_ms = Some(now_epoch_ms());
             true
         } else {
             let v = match (kind(name)?, m.args.first()?) {
@@ -36,26 +102,72 @@ impl State {
                 _ => return None,
             };
             self.values.insert(name.to_string(), v);
+            // Si el usuario cambió un slider en VRChat, actualizamos también last_sent para permitir re-sobrescribirlo
+            self.last_sent.insert(name.to_string(), v);
             if name != "Mode" {
                 return None;
             }
-            v != Value::I(0)
+            let is_open = v != Value::I(0);
+            if !is_open {
+                // Al cerrarse la cámara, la pose anterior deja de ser fresca y limpiamos caché de envíos.
+                self.pose_fresh = false;
+                self.last_sent.clear();
+            }
+            is_open
         };
         let was = std::mem::replace(&mut self.open, open);
         match (was, open) {
-            (false, true) => Some(Change::Opened),
+            (false, true) => {
+                self.last_sent.clear();
+                Some(Change::Opened)
+            }
             (true, false) => Some(Change::Closed),
             _ => None,
         }
     }
 
+    pub fn snapshot(&self) -> CameraSnapshot {
+        let get_f = |k: &str| match self.values.get(k).or_else(|| self.last_sent.get(k)) {
+            Some(Value::F(v)) => Some(*v),
+            _ => None,
+        };
+        CameraSnapshot {
+            open: self.open,
+            rx_available: self.rx_available,
+            pose: self.pose,
+            pose_fresh: self.pose_fresh,
+            pose_seq: self.pose_seq,
+            pose_epoch_ms: self.pose_epoch_ms,
+            zoom: get_f("Zoom"),
+            exposure: get_f("Exposure"),
+            focal_distance: get_f("FocalDistance"),
+            aperture: get_f("Aperture"),
+        }
+    }
+
     /// `Mode` y `Pose` con la cámara cerrada no hacen nada, pero `Mode` sí devuelve eco: si la app lo
-    /// enviara, el estado creería que está abierta. Por eso se bloquean aquí.
+    /// enviara, el estado creería que está abierta. Por eso se bloquean aquí (salvo cuando `rx_available` es `false`
+    /// y operamos en modo de Control Abierto).
     fn check_writable(&self, name: &str) -> Result<(), String> {
-        if !self.open && matches!(name, "Mode" | "Pose") {
+        if self.rx_available && !self.open && matches!(name, "Mode" | "Pose") {
             return Err("cámara cerrada: ábrela en VRChat".into());
         }
         Ok(())
+    }
+
+    /// Determina si debemos enviar el valor por UDP o si es idéntico al último enviado (evita inundar a 60 Hz).
+    pub fn should_send(&mut self, name: &str, value: Value) -> Result<bool, String> {
+        self.check_writable(name)?;
+        if matches!(kind(name), Some(Kind::Trigger)) {
+            return Ok(true);
+        }
+        if let Some(prev) = self.last_sent.get(name).copied() {
+            if values_close_enough(prev, value) {
+                return Ok(false);
+            }
+        }
+        self.last_sent.insert(name.to_string(), value);
+        Ok(true)
     }
 }
 
@@ -105,11 +217,21 @@ impl Camera {
             let change = s.lock().unwrap().apply(&m);
             change.into_iter().for_each(&on_change);
         })?;
+        {
+            let mut st = state.lock().unwrap();
+            st.rx_available = osc.rx_bound;
+            if !osc.rx_bound {
+                // En modo Control Abierto (sin escucha en 9001), asumimos cámara abierta para no bloquear envíos.
+                st.open = true;
+            }
+        }
         Ok(Camera { osc, state })
     }
 
     pub fn set(&self, name: &str, value: Value) -> Result<(), String> {
-        self.state.lock().unwrap().check_writable(name)?;
+        if !self.state.lock().unwrap().should_send(name, value)? {
+            return Ok(());
+        }
         self.osc.set(name, value)
     }
 
@@ -119,6 +241,7 @@ impl Camera {
     }
 
     pub fn reset(&self) -> Result<(), String> {
+        self.state.lock().unwrap().last_sent.clear();
         DEFAULTS.iter().try_for_each(|(n, v)| self.set(n, *v))
     }
 }
@@ -172,5 +295,36 @@ mod tests {
         assert!(s.check_writable("Zoom").is_ok());
         s.open = true;
         assert!(s.check_writable("Mode").is_ok());
+    }
+
+    #[test]
+    fn deduplicates_identical_slider_writes_and_allows_triggers() {
+        let mut s = State::default();
+        s.open = true;
+        assert!(s.should_send("Zoom", Value::F(45.0)).unwrap());
+        assert!(!s.should_send("Zoom", Value::F(45.0002)).unwrap());
+        assert!(s.should_send("Zoom", Value::F(46.0)).unwrap());
+        // Los triggers (Capture) siempre se envían
+        assert!(s.should_send("Capture", Value::B(true)).unwrap());
+        assert!(s.should_send("Capture", Value::B(true)).unwrap());
+    }
+
+    #[test]
+    fn invalidates_pose_freshness_on_close_until_new_pose() {
+        let mut s = State::default();
+        assert!(!s.snapshot().pose_fresh);
+        let pose: Vec<_> = [1.0, 1.5, 2.0, 10.0, 90.0, 0.0].iter().map(|v| OscType::Float(*v)).collect();
+        s.apply(&msg("Pose", pose.clone()));
+        assert!(s.snapshot().pose_fresh);
+        assert_eq!(s.snapshot().pose_seq, 1);
+        // Cerrar cámara invalida la frescura de la pose previa
+        s.apply(&msg("Mode", vec![OscType::Int(0)]));
+        assert!(!s.snapshot().pose_fresh);
+        // Reabrir por Mode no hace fresca la pose antigua hasta recibir un nuevo paquete Pose
+        s.apply(&msg("Mode", vec![OscType::Int(1)]));
+        assert!(!s.snapshot().pose_fresh);
+        s.apply(&msg("Pose", pose));
+        assert!(s.snapshot().pose_fresh);
+        assert_eq!(s.snapshot().pose_seq, 2);
     }
 }

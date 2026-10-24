@@ -13,10 +13,10 @@
     "windows": [
       {
         "title": "Velza Iris",
-        "width": 960,
-        "height": 640,
-        "minWidth": 720,
-        "minHeight": 480
+        "width": 1240,
+        "height": 800,
+        "minWidth": 900,
+        "minHeight": 620
       }
     ],
     "security": {

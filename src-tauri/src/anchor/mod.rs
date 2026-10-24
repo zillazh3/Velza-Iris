@@ -3,7 +3,7 @@
 use crate::osc::protocol::Pose;
 
 /// Origen de los presets: posición de los ojos del jugador y hacia dónde mira (yaw en grados).
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Anchor {
     pub eye: [f32; 3],
     pub yaw: f32,
@@ -38,6 +38,56 @@ impl Anchor {
                 f.height.atan2(f.distance).to_degrees() + f.pitch,
                 (self.yaw + f.yaw + 180.0).rem_euclid(360.0),
                 f.roll,
+            ],
+        }
+    }
+
+    /// Transforma una Pose arbitraria 6DoF de mundo al espacio relativo del ancla (Anchor Space).
+    /// En Anchor Space: origen = `self.eye`, eje +Z = frente del ancla (`self.yaw`), +X = derecha, +Y = arriba.
+    pub fn world_to_local(&self, world: &Pose) -> Pose {
+        let dx = world.pos[0] - self.eye[0];
+        let dy = world.pos[1] - self.eye[1];
+        let dz = world.pos[2] - self.eye[2];
+        let a = self.yaw.to_radians();
+        let (s, c) = a.sin_cos();
+        // Base del ancla en mundo: forward = (sin a, 0, cos a), right = (cos a, 0, -sin a)
+        let local_x = dx * c - dz * s;
+        let local_z = dx * s + dz * c;
+        let wrap180 = |deg: f32| {
+            let r = deg.rem_euclid(360.0);
+            if r > 180.0 { r - 360.0 } else { r }
+        };
+        Pose {
+            pos: [local_x, dy, local_z],
+            rot: [
+                wrap180(world.rot[0]),
+                wrap180(world.rot[1] - self.yaw),
+                wrap180(world.rot[2]),
+            ],
+        }
+    }
+
+    /// Reconstruye una Pose de mundo a partir de una Pose en espacio relativo del ancla, con factor de escala espacial.
+    pub fn local_to_world(&self, local: &Pose, scale: f32) -> Pose {
+        let sc = if scale.is_finite() && scale > 0.01 { scale.clamp(0.1, 10.0) } else { 1.0 };
+        let lx = local.pos[0] * sc;
+        let ly = local.pos[1] * sc;
+        let lz = local.pos[2] * sc;
+        let a = self.yaw.to_radians();
+        let (s, c) = a.sin_cos();
+        let wx = self.eye[0] + lx * c + lz * s;
+        let wy = self.eye[1] + ly;
+        let wz = self.eye[2] - lx * s + lz * c;
+        let wrap180 = |deg: f32| {
+            let r = deg.rem_euclid(360.0);
+            if r > 180.0 { r - 360.0 } else { r }
+        };
+        Pose {
+            pos: [wx, wy, wz],
+            rot: [
+                wrap180(local.rot[0]).clamp(-90.0, 90.0),
+                wrap180(local.rot[1] + self.yaw),
+                wrap180(local.rot[2]),
             ],
         }
     }
@@ -90,5 +140,25 @@ mod tests {
     fn calibrates_from_pose() {
         let p = Pose { pos: [3.0, 1.62, -2.0], rot: [4.0, -88.0, 0.0] };
         assert_eq!(Anchor::from_pose(&p), Anchor { eye: [3.0, 1.62, -2.0], yaw: -88.0 });
+    }
+
+    #[test]
+    fn world_local_roundtrip_and_relocation() {
+        let a1 = Anchor { eye: [2.5, 1.65, -4.0], yaw: 37.0 };
+        let world_orig = Pose { pos: [4.1, 2.05, -1.8], rot: [-12.5, -145.0, 8.0] };
+        let local = a1.world_to_local(&world_orig);
+        let back = a1.local_to_world(&local, 1.0);
+        assert_pose(back, world_orig.pos, world_orig.rot);
+
+        // Si el jugador se mueve y gira 90°, la distancia al ancla se preserva exactamente (o escala por `scale`)
+        let a2 = Anchor { eye: [-10.0, 1.65, 5.0], yaw: 127.0 };
+        let relocated = a2.local_to_world(&local, 1.0);
+        let dist1 = ((world_orig.pos[0] - a1.eye[0]).powi(2) + (world_orig.pos[2] - a1.eye[2]).powi(2)).sqrt();
+        let dist2 = ((relocated.pos[0] - a2.eye[0]).powi(2) + (relocated.pos[2] - a2.eye[2]).powi(2)).sqrt();
+        assert!((dist1 - dist2).abs() < 1e-3);
+
+        let scaled = a2.local_to_world(&local, 2.0);
+        let dist_scaled = ((scaled.pos[0] - a2.eye[0]).powi(2) + (scaled.pos[2] - a2.eye[2]).powi(2)).sqrt();
+        assert!((dist_scaled - dist1 * 2.0).abs() < 1e-3);
     }
 }
