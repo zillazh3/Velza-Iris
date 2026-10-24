@@ -21,6 +21,9 @@ export type CameraSnapshot = {
   exposure: number | null;
   focalDistance: number | null;
   aperture: number | null;
+  lookAtMe?: boolean | null;
+  smoothMovement?: boolean | null;
+  streaming?: boolean | null;
 };
 
 export type Look = {
@@ -291,6 +294,7 @@ export const api = {
   status: () => invoke<Status>("status"),
   calibrate: () => invoke<void>("calibrate"),
   resetDefaults: () => invoke<void>("reset_defaults"),
+  setCameraToggle: (name: string, enabled: boolean) => invoke<void>("set_camera_toggle", { name, enabled }),
   listPresets: () => invoke<{ presets: Preset[]; warnings: string[] }>("list_presets"),
   applyPreset: (name: string) => invoke<void>("apply_preset", { name }),
   saveUserPreset: (preset: Preset) => invoke<void>("save_user_preset", { preset }),

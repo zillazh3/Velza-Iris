@@ -189,7 +189,7 @@ mod tests {
     #[test]
     fn seeds_are_valid() {
         let s = seeds();
-        assert_eq!(s.len(), 11);
+        assert_eq!(s.len(), 13);
         assert!(seed("Mundo nocturno").modifier && seed("Mundo nocturno").frame.is_none());
     }
 

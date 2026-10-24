@@ -33,6 +33,29 @@ pub struct CameraSnapshot {
     pub exposure: Option<f32>,
     pub focal_distance: Option<f32>,
     pub aperture: Option<f32>,
+    pub look_at_me: Option<bool>,
+    pub smooth_movement: Option<bool>,
+    pub streaming: Option<bool>,
+}
+
+impl Default for CameraSnapshot {
+    fn default() -> Self {
+        CameraSnapshot {
+            open: false,
+            rx_available: true,
+            pose: None,
+            pose_fresh: false,
+            pose_seq: 0,
+            pose_epoch_ms: None,
+            zoom: None,
+            exposure: None,
+            focal_distance: None,
+            aperture: None,
+            look_at_me: None,
+            smooth_movement: None,
+            streaming: None,
+        }
+    }
 }
 
 fn default_true() -> bool {
@@ -131,6 +154,10 @@ impl State {
             Some(Value::F(v)) => Some(*v),
             _ => None,
         };
+        let get_b = |k: &str| match self.values.get(k).or_else(|| self.last_sent.get(k)) {
+            Some(Value::B(v)) => Some(*v),
+            _ => None,
+        };
         CameraSnapshot {
             open: self.open,
             rx_available: self.rx_available,
@@ -142,6 +169,9 @@ impl State {
             exposure: get_f("Exposure"),
             focal_distance: get_f("FocalDistance"),
             aperture: get_f("Aperture"),
+            look_at_me: get_b("LookAtMe"),
+            smooth_movement: get_b("SmoothMovement"),
+            streaming: get_b("Streaming"),
         }
     }
 
@@ -326,5 +356,18 @@ mod tests {
         s.apply(&msg("Pose", pose));
         assert!(s.snapshot().pose_fresh);
         assert_eq!(s.snapshot().pose_seq, 2);
+    }
+
+    #[test]
+    fn snapshot_tracks_boolean_toggles() {
+        let mut s = State::default();
+        assert_eq!(s.snapshot().look_at_me, None);
+        assert_eq!(s.snapshot().streaming, None);
+        s.apply(&msg("LookAtMe", vec![OscType::Bool(true)]));
+        s.apply(&msg("Streaming", vec![OscType::Bool(false)]));
+        s.apply(&msg("SmoothMovement", vec![OscType::Bool(true)]));
+        assert_eq!(s.snapshot().look_at_me, Some(true));
+        assert_eq!(s.snapshot().streaming, Some(false));
+        assert_eq!(s.snapshot().smooth_movement, Some(true));
     }
 }

@@ -111,14 +111,14 @@ pub struct Runner {
 }
 
 fn sleep_until(deadline: Instant) {
-    if let Some(d) = deadline.checked_duration_since(Instant::now()) {
-        if d > Duration::from_millis(2) {
-            std::thread::sleep(d - Duration::from_millis(2));
+    while let Some(d) = deadline.checked_duration_since(Instant::now()) {
+        if d > Duration::from_millis(1) {
+            std::thread::sleep(Duration::from_millis(1));
+        } else if d > Duration::from_micros(80) {
+            std::thread::yield_now();
+        } else {
+            std::hint::spin_loop();
         }
-    }
-    // ponytail: spin fino de ≤2 ms por tick (~10 % de un núcleo); subir el sleep si molesta.
-    while Instant::now() < deadline {
-        std::hint::spin_loop();
     }
 }
 
