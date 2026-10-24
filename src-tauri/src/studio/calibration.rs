@@ -10,6 +10,7 @@
 
 use super::math3d::{angle_diff_deg, clamp_vec3_len, dist3, lerp3, norm3, wrap180, Quat};
 use super::model::CalibrationConfig;
+use crate::anchor::AnchorLifecycleState;
 use crate::camera::CameraSnapshot;
 use crate::osc::protocol::Pose;
 use serde::{Deserialize, Serialize};
@@ -280,7 +281,50 @@ impl CalibrationRuntime {
         zoom_mm: f32,
         lateral_vel_mps: f32,
     ) -> TelemetryReport {
+        self.observe_and_update_with_anchor(snap, None, now_ms, dt, cfg, zoom_mm, lateral_vel_mps)
+    }
+
+    /// Evalúa la realimentación coordinando con el estado del `AnchorManager` para evitar deriva acumulativa
+    /// durante cambios de modo de cámara o pérdidas temporales de sincronización (`SyncLost` / `Recovering`).
+    pub fn observe_and_update_with_anchor(
+        &mut self,
+        snap: Option<&CameraSnapshot>,
+        anchor_state: Option<AnchorLifecycleState>,
+        now_ms: u64,
+        dt: f32,
+        cfg: &CalibrationConfig,
+        zoom_mm: f32,
+        lateral_vel_mps: f32,
+    ) -> TelemetryReport {
         let vis_angles = compute_visual_framing_angles(cfg, zoom_mm, lateral_vel_mps);
+
+        if matches!(
+            anchor_state,
+            Some(
+                AnchorLifecycleState::SyncLost
+                    | AnchorLifecycleState::Recovering
+                    | AnchorLifecycleState::Acquiring
+            )
+        ) {
+            self.prev_error_sign = [0; 3];
+            return TelemetryReport {
+                certainty: DataCertainty::Estimated {
+                    confidence: 0.5,
+                    reason: "Ancla en transición o resincronización temporal".into(),
+                },
+                loop_mode: ControlLoopMode::OpenLoop {
+                    reason: "Corrección adaptativa en pausa durante sincronización/cambio de modo del ancla".into(),
+                },
+                confidence: 0.5,
+                estimated_latency_ms: self.estimated_latency_ms,
+                pos_error_m: None,
+                rot_error_deg: None,
+                active_pos_correction: self.active_pos_correction,
+                active_rot_correction: self.active_rot_correction,
+                visual_framing_offset_deg: vis_angles,
+                log: self.log.clone(),
+            };
+        }
 
         let Some(cam) = snap else {
             return TelemetryReport {
@@ -644,5 +688,49 @@ mod tests {
         let rep = rt.observe_and_update(Some(&grabbed_snap), 1085, 0.016, &cfg, 45.0, 0.0);
         assert!(matches!(rep.loop_mode, ControlLoopMode::OpenLoop { .. }));
         assert_eq!(rt.active_pos_correction, [0.0; 3], "no debe aplicar corrección ante anomalía externa");
+    }
+
+    #[test]
+    fn freezes_adaptive_correction_during_anchor_sync_loss_and_recovery() {
+        let mut rt = CalibrationRuntime::default();
+        let cfg = active_cfg();
+        let desired = Pose { pos: [0.0, 1.6, 2.0], rot: [0.0, 180.0, 0.0] };
+        rt.record_sent_pose(1000, desired);
+
+        let snap = CameraSnapshot {
+            open: true,
+            mode: 2,
+            pose: Some(Pose { pos: [0.08, 1.6, 2.0], rot: [0.0, 180.0, 0.0] }),
+            pose_fresh: true,
+            pose_seq: 1,
+            pose_epoch_ms: Some(1085),
+            zoom: Some(45.0),
+            ..Default::default()
+        };
+
+        // Mientras el ancla está en SyncLost o Recovering, no debe acumular deriva en active_pos_correction
+        let rep_lost = rt.observe_and_update_with_anchor(
+            Some(&snap),
+            Some(AnchorLifecycleState::SyncLost),
+            1085,
+            0.016,
+            &cfg,
+            45.0,
+            0.0,
+        );
+        assert!(matches!(rep_lost.loop_mode, ControlLoopMode::OpenLoop { .. }));
+        assert_eq!(rt.active_pos_correction, [0.0; 3]);
+
+        let rep_rec = rt.observe_and_update_with_anchor(
+            Some(&snap),
+            Some(AnchorLifecycleState::Recovering),
+            1100,
+            0.016,
+            &cfg,
+            45.0,
+            0.0,
+        );
+        assert!(matches!(rep_rec.loop_mode, ControlLoopMode::OpenLoop { .. }));
+        assert_eq!(rt.active_pos_correction, [0.0; 3]);
     }
 }

@@ -217,6 +217,28 @@ impl Transition {
     }
 }
 
+/// Evalúa una curva Bézier cúbica `[x1, y1, x2, y2]` estándar con resolución Newton-Raphson.
+pub fn sample_cubic_bezier(t: f32, x1: f32, y1: f32, x2: f32, y2: f32) -> f32 {
+    let t = t.clamp(0.0, 1.0);
+    let mut u = t;
+    for _ in 0..6 {
+        let one_minus_u = 1.0 - u;
+        let slope = 3.0 * one_minus_u * one_minus_u * x1
+            + 6.0 * one_minus_u * u * (x2 - x1)
+            + 3.0 * u * u * (1.0 - x2);
+        if slope.abs() < 1e-5 {
+            break;
+        }
+        let current_x = 3.0 * one_minus_u * one_minus_u * u * x1
+            + 3.0 * one_minus_u * u * u * x2
+            + u * u * u;
+        let diff = current_x - t;
+        u = (u - diff / slope).clamp(0.0, 1.0);
+    }
+    let one_minus_u = 1.0 - u;
+    3.0 * one_minus_u * one_minus_u * u * y1 + 3.0 * one_minus_u * u * u * y2 + u * u * u
+}
+
 /// Ajustes ópticos opcionales asociados a un keyframe.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -246,6 +268,9 @@ pub struct Keyframe {
     /// Transición para llegar a este punto desde el punto anterior.
     #[serde(default)]
     pub transition: Transition,
+    /// Curva Bézier personalizada opcional `[x1, y1, x2, y2]`.
+    #[serde(default)]
+    pub custom_curve: Option<[f32; 4]>,
     /// Comportamiento de continuidad de velocidad al cruzar este punto (`PassThrough` vs `Stop`).
     #[serde(default)]
     pub knot_mode: KnotMode,
@@ -323,6 +348,8 @@ pub struct EffectClip {
     pub param_b: Option<f32>,
     #[serde(default)]
     pub easing: Transition,
+    #[serde(default)]
+    pub custom_curve: Option<[f32; 4]>,
     #[serde(default = "default_true")]
     pub enabled: bool,
 }
@@ -340,9 +367,9 @@ fn default_true() -> bool {
 #[serde(rename_all = "camelCase")]
 pub enum TargetSourceKind {
     /// Punto 3D estático capturado colocando la cámara en el objetivo.
-    #[default]
     StaticCalibratedPoint,
-    /// Origen del ancla calibrada (ojos del jugador en el momento de calibrar).
+    /// Origen del ancla calibrada (ojos del jugador operador local). Fuente predeterminada.
+    #[default]
     CalibratedAnchor,
     /// Coordenada introducida o ajustada manualmente en el inspector.
     ManualReference,
@@ -482,6 +509,7 @@ impl SequenceProject {
                 local_pose: Some(local_pose),
                 captured_at_ms: 0,
                 transition: Transition::Smooth,
+                custom_curve: None,
                 knot_mode: if i == 0 || i == steps { KnotMode::Stop } else { KnotMode::PassThrough },
                 look: LookTrackPoint {
                     zoom,
@@ -505,6 +533,7 @@ impl SequenceProject {
                 param_a: None,
                 param_b: None,
                 easing: Transition::Linear,
+                custom_curve: None,
                 enabled: true,
             });
         }
@@ -710,6 +739,7 @@ mod tests {
             local_pose: None,
             captured_at_ms: 1000,
             transition: Transition::Smooth,
+            custom_curve: None,
             knot_mode: KnotMode::PassThrough,
             look: LookTrackPoint::default(),
         }
@@ -781,6 +811,7 @@ mod tests {
             param_a: Some(0.8),
             param_b: None,
             easing: Transition::Smooth,
+            custom_curve: None,
             enabled: true,
         });
 
@@ -815,6 +846,7 @@ mod tests {
             param_a: Some(35.0),
             param_b: Some(65.0),
             easing: Transition::Smooth,
+            custom_curve: None,
             enabled: true,
         });
 

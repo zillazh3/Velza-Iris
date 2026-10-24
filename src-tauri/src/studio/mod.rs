@@ -47,6 +47,7 @@ pub fn starter_sequences() -> Vec<SequenceProject> {
             local_pose: Some(local),
             captured_at_ms: 0,
             transition: Transition::Smooth,
+            custom_curve: None,
             knot_mode,
             look: LookTrackPoint {
                 zoom,
@@ -86,6 +87,7 @@ pub fn starter_sequences() -> Vec<SequenceProject> {
             param_a: None,
             param_b: None,
             easing: Transition::Smooth,
+            custom_curve: None,
             enabled: true,
         }],
         raw_recording: Vec::new(),
@@ -122,6 +124,7 @@ pub fn starter_sequences() -> Vec<SequenceProject> {
                 param_a: Some(60.0),
                 param_b: Some(32.0),
                 easing: Transition::SmoothInOut,
+                custom_curve: None,
                 enabled: true,
             },
             EffectClip {
@@ -135,6 +138,7 @@ pub fn starter_sequences() -> Vec<SequenceProject> {
                 param_a: None,
                 param_b: None,
                 easing: Transition::Linear,
+                custom_curve: None,
                 enabled: true,
             },
         ],
