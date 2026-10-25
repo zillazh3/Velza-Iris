@@ -538,11 +538,13 @@ pub fn capture_target_point(blend: f32, st: State<App>) -> Result<TargetConfig, 
         .pose
         .ok_or("No pudimos leer la posición actual de tu cámara.")?;
 
+    let clean_blend = if blend.is_finite() { blend.clamp(0.0, 1.0) } else { 1.0 };
+
     Ok(TargetConfig {
         enabled: true,
         source: TargetSourceKind::StaticCalibratedPoint,
         world_pos: raw_pose.pos,
-        blend: blend.clamp(0.0, 1.0),
+        blend: clean_blend,
         confidence: 1.0,
         captured_at_ms: snap.pose_epoch_ms.unwrap_or(0),
     })
@@ -572,16 +574,16 @@ pub fn evaluate_sequence(
             if cam.state.lock().unwrap().open {
                 let _ = cam.set("LookAtMe", Value::B(false));
                 let _ = cam.pose(&frame.final_pose);
-                if let Some(z) = frame.zoom {
+                if let Some(z) = frame.zoom.filter(|z| z.is_finite()) {
                     let _ = cam.set("Zoom", Value::F(z));
                 }
-                if let Some(e) = frame.exposure {
+                if let Some(e) = frame.exposure.filter(|e| e.is_finite()) {
                     let _ = cam.set("Exposure", Value::F(e));
                 }
-                if let Some(fd) = frame.focal_distance {
+                if let Some(fd) = frame.focal_distance.filter(|fd| fd.is_finite()) {
                     let _ = cam.set("FocalDistance", Value::F(fd));
                 }
-                if let Some(ap) = frame.aperture {
+                if let Some(ap) = frame.aperture.filter(|ap| ap.is_finite()) {
                     let _ = cam.set("Aperture", Value::F(ap));
                 }
             }

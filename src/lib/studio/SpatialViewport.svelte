@@ -49,18 +49,22 @@
     let hasTrajectoryReference = false;
     if (preview) {
       for (const n of preview.nodes) {
-        pts.push(n.worldPos);
-        hasTrajectoryReference = true;
+        if (Array.isArray(n.worldPos) && n.worldPos.length === 3 && n.worldPos.every(Number.isFinite)) {
+          pts.push(n.worldPos);
+          hasTrajectoryReference = true;
+        }
       }
       for (const p of preview.finalPath) {
-        pts.push(p);
-        hasTrajectoryReference = true;
+        if (Array.isArray(p) && p.length === 3 && p.every(Number.isFinite)) {
+          pts.push(p);
+          hasTrajectoryReference = true;
+        }
       }
-      if (preview.anchorPos) {
+      if (preview.anchorPos && Array.isArray(preview.anchorPos) && preview.anchorPos.every(Number.isFinite)) {
         pts.push(preview.anchorPos);
         hasTrajectoryReference = true;
       }
-      if (preview.targetPos) {
+      if (preview.targetPos && Array.isArray(preview.targetPos) && preview.targetPos.every(Number.isFinite)) {
         pts.push(preview.targetPos);
         hasTrajectoryReference = true;
       }
@@ -69,11 +73,15 @@
     // alrededor del ancla calibrada o del origen para que la cámara pueda desplazarse libremente
     // por la grilla sin auto-centrarse en su propia posición en cada frame
     if (!hasTrajectoryReference) {
-      const anchorEye = preview?.anchorPos ?? [0, 1.6, 0];
+      const anchorEye = (preview?.anchorPos && preview.anchorPos.every(Number.isFinite))
+        ? preview.anchorPos
+        : [0, 1.6, 0];
       pts.push([anchorEye[0] - 1.5, anchorEye[1] - 0.6, anchorEye[2] - 1.5]);
       pts.push([anchorEye[0] + 1.5, anchorEye[1] + 0.9, anchorEye[2] + 1.5]);
     }
-    if (liveCameraPose) pts.push(liveCameraPose.pos);
+    if (liveCameraPose && Array.isArray(liveCameraPose.pos) && liveCameraPose.pos.length === 3 && liveCameraPose.pos.every(Number.isFinite)) {
+      pts.push(liveCameraPose.pos);
+    }
     if (pts.length === 0) {
       return { center: [0, 1.6, 0] as [number, number, number], span: 3.5 };
     }
@@ -94,13 +102,21 @@
     const cx = (minX + maxX) / 2;
     const cy = (minY + maxY) / 2;
     const cz = (minZ + maxZ) / 2;
-    const span = Math.max(maxX - minX, maxY - minY, maxZ - minZ, 2.2) * 1.35;
-    return { center: [cx, cy, cz] as [number, number, number], span };
+    const rawSpan = Math.max(maxX - minX, maxY - minY, maxZ - minZ, 2.2) * 1.35;
+    const center: [number, number, number] = [
+      Number.isFinite(cx) ? cx : 0,
+      Number.isFinite(cy) ? cy : 1.6,
+      Number.isFinite(cz) ? cz : 0,
+    ];
+    const span = Number.isFinite(rawSpan) && rawSpan > 0.1 ? rawSpan : 3.5;
+    return { center, span };
   });
 
   function project(pt: [number, number, number]): { x: number; y: number; depth: number } {
     const [cx, cy, cz] = bounds.center;
-    const scale = (Math.min(W, H) / bounds.span) * 0.78 * zoomScale;
+    const safeSpan = Number.isFinite(bounds.span) && bounds.span > 0.001 ? bounds.span : 3.5;
+    const safeZoom = Number.isFinite(zoomScale) && zoomScale > 0 ? zoomScale : 1;
+    const scale = (Math.min(W, H) / safeSpan) * 0.78 * safeZoom;
     const dx = pt[0] - cx;
     const dy = pt[1] - cy;
     const dz = pt[2] - cz;
@@ -241,6 +257,10 @@
       newY = Math.round(newY * 100) / 100;
       newZ = Math.round(newZ * 100) / 100;
 
+      if (!Number.isFinite(newX) || !Number.isFinite(newY) || !Number.isFinite(newZ)) {
+        return;
+      }
+
       draggingNodePos = [newX, newY, newZ];
       onUpdateKeyframePos?.(draggingNodeId, [newX, newY, newZ]);
       return;
@@ -252,7 +272,14 @@
       lastMouse = [e.clientX, e.clientY];
       const sx = dragSvgScale[0] > 0 ? dragSvgScale[0] : 1;
       const sy = dragSvgScale[1] > 0 ? dragSvgScale[1] : 1;
-      panOffset = [panOffset[0] + dxClient / sx, panOffset[1] + dyClient / sy];
+      const nextPanX = panOffset[0] + dxClient / sx;
+      const nextPanY = panOffset[1] + dyClient / sy;
+      if (Number.isFinite(nextPanX) && Number.isFinite(nextPanY)) {
+        panOffset = [
+          Math.max(-5000, Math.min(5000, nextPanX)),
+          Math.max(-5000, Math.min(5000, nextPanY)),
+        ];
+      }
       return;
     }
 
@@ -348,10 +375,14 @@
       }
 
       // Desplazar panOffset para mantener invariante la posición espacial bajo el cursor
-      panOffset = [
-        (mx - W / 2) * (1 - kEff) + panOffset[0] * kEff,
-        (my - H / 2) * (1 - kEff) + panOffset[1] * kEff,
-      ];
+      const nextPanX = (mx - W / 2) * (1 - kEff) + panOffset[0] * kEff;
+      const nextPanY = (my - H / 2) * (1 - kEff) + panOffset[1] * kEff;
+      if (Number.isFinite(nextPanX) && Number.isFinite(nextPanY)) {
+        panOffset = [
+          Math.max(-5000, Math.min(5000, nextPanX)),
+          Math.max(-5000, Math.min(5000, nextPanY)),
+        ];
+      }
       zoomScale = newScale;
     }}
   >

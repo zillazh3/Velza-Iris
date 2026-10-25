@@ -11,6 +11,8 @@ pub const STUDIO_SCHEMA_VERSION: u32 = 2;
 pub const DEFAULT_PROJECT_DURATION_SEC: f32 = 10.0;
 pub const MIN_PROJECT_DURATION_SEC: f32 = 0.2;
 pub const MAX_PROJECT_DURATION_SEC: f32 = 3600.0;
+pub const MAX_KEYFRAMES: usize = 500;
+pub const MAX_EFFECTS: usize = 200;
 
 /// Unidad preferida para visualizar y editar la duración del proyecto en la interfaz.
 /// La representación interna del proyecto es siempre en segundos (`f32`).
@@ -698,6 +700,12 @@ impl SequenceProject {
                 self.duration
             ));
         }
+        if self.keyframes.len() > MAX_KEYFRAMES {
+            return Err(format!("Demasiados fotogramas clave ({}, máximo {})", self.keyframes.len(), MAX_KEYFRAMES));
+        }
+        if self.effects.len() > MAX_EFFECTS {
+            return Err(format!("Demasiados efectos ({}, máximo {})", self.effects.len(), MAX_EFFECTS));
+        }
         for kf in &self.keyframes {
             if !kf.time.is_finite() || kf.time < 0.0 || kf.time > self.duration + 1e-3 {
                 return Err(format!("{}: tiempo {} fuera de la duración", kf.label, kf.time));
@@ -888,5 +896,37 @@ mod tests {
         assert_eq!(loaded.duration_unit, DurationUnit::Seconds);
         assert_eq!(loaded.duration_input_mode, DurationInputMode::ValueUnit);
         assert!(loaded.validate().is_ok());
+    }
+
+    #[test]
+    fn rejects_excessive_keyframes_and_effects() {
+        let mut p = SequenceProject::new("test-caps", "Test Caps", 100.0);
+        for i in 0..(MAX_KEYFRAMES + 1) {
+            p.keyframes.push(sample_kf(&format!("kf-{i}"), (i as f32) * 0.1, 0.0));
+        }
+        assert!(p.validate().is_err());
+
+        // Dentro del límite pasa
+        p.keyframes.pop();
+        assert!(p.validate().is_ok());
+
+        // Exceso de efectos
+        for i in 0..(MAX_EFFECTS + 1) {
+            p.effects.push(EffectClip {
+                id: format!("ef-{i}"),
+                kind: EffectKind::Handheld,
+                track: 0,
+                start_time: 0.0,
+                duration: 5.0,
+                intensity: 1.0,
+                speed: 1.0,
+                param_a: None,
+                param_b: None,
+                easing: Transition::Smooth,
+                custom_curve: None,
+                enabled: true,
+            });
+        }
+        assert!(p.validate().is_err());
     }
 }

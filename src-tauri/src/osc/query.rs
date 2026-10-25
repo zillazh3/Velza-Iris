@@ -20,9 +20,16 @@ fn http_get(addr: &str, path: &str) -> Result<String, String> {
 }
 
 /// Dirección UDP a la que VRChat espera nuestros mensajes, según su HOST_INFO.
+/// Rechaza cualquier dirección que no sea de loopback para prevenir SSRF y fuga de telemetría a la red local.
 fn parse_host_info(body: &str) -> Option<SocketAddr> {
     let v: serde_json::Value = serde_json::from_str(body).ok()?;
-    format!("{}:{}", v["OSC_IP"].as_str()?, v["OSC_PORT"].as_u64()?).parse().ok()
+    let ip_str = v["OSC_IP"].as_str()?;
+    let port = u16::try_from(v["OSC_PORT"].as_u64()?).ok()?;
+    let ip: std::net::IpAddr = ip_str.trim_matches(|c| c == '[' || c == ']').parse().ok()?;
+    if !ip.is_loopback() {
+        return None;
+    }
+    Some(SocketAddr::new(ip, port))
 }
 
 /// Busca `VRChat-Client-*` por mDNS hasta `timeout` y devuelve su destino OSC.
@@ -56,5 +63,19 @@ mod tests {
         let body = r#"{"NAME":"VRChat-Client-EC5D92","EXTENSIONS":{"ACCESS":true},"OSC_IP":"127.0.0.1","OSC_PORT":9000,"OSC_TRANSPORT":"UDP"}"#;
         assert_eq!(parse_host_info(body), Some("127.0.0.1:9000".parse().unwrap()));
         assert_eq!(parse_host_info("{}"), None);
+    }
+
+    #[test]
+    fn rejects_non_loopback_host_info() {
+        // Rechaza endpoints de LAN, WAN o broadcast para evitar redirección de telemetría
+        let lan_body = r#"{"NAME":"VRChat-Fake","OSC_IP":"192.168.1.150","OSC_PORT":9000}"#;
+        assert_eq!(parse_host_info(lan_body), None);
+
+        let wan_body = r#"{"NAME":"VRChat-Fake","OSC_IP":"8.8.8.8","OSC_PORT":9000}"#;
+        assert_eq!(parse_host_info(wan_body), None);
+
+        // Permite loopback IPv6
+        let ipv6_loopback = r#"{"NAME":"VRChat-Client","OSC_IP":"::1","OSC_PORT":9000}"#;
+        assert_eq!(parse_host_info(ipv6_loopback), Some("[::1]:9000".parse().unwrap()));
     }
 }
