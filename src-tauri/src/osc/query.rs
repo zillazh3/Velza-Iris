@@ -42,10 +42,10 @@ pub fn vrchat_target(timeout: Duration) -> Result<SocketAddr, String> {
         let Some(left) = end.checked_duration_since(Instant::now()) else {
             break Err("VRChat no apareció por OSCQuery; ¿OSC habilitado?".to_string());
         };
-        if let Ok(ServiceEvent::ServiceResolved(r)) = rx.recv_timeout(left) {
-            if r.get_fullname().contains("VRChat-Client") {
-                break Ok(r.get_port());
-            }
+        if let Ok(ServiceEvent::ServiceResolved(r)) = rx.recv_timeout(left)
+            && r.get_fullname().contains("VRChat-Client")
+        {
+            break Ok(r.get_port());
         }
     };
     let _ = mdns.shutdown();

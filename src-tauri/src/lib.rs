@@ -1,4 +1,5 @@
 pub mod anchor;
+pub mod avatar;
 pub mod camera;
 mod commands;
 pub mod motion;
@@ -49,7 +50,13 @@ pub fn run() {
             commands::reset_calibration_cmd,
             commands::load_motion_as_sequence,
             commands::import_vrc_dolly_cmd,
-            commands::export_vrc_dolly_cmd
+            commands::export_vrc_dolly_cmd,
+            commands::fit_keyframes_to_duration,
+            commands::sample_base_pose_at,
+            commands::avatar_status,
+            commands::avatar_config,
+            commands::save_avatar_config,
+            commands::trigger_avatar_action
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

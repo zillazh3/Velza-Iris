@@ -25,7 +25,7 @@ pub enum StudioCmd {
     Seek(f32),
     Loop(bool),
     Speed(f32),
-    UpdateProject(SequenceProject, Option<Anchor>),
+    UpdateProject(Box<SequenceProject>, Option<Anchor>),
     Quit,
 }
 
@@ -153,7 +153,7 @@ fn run_loop(
                     }
                 }
                 Ok(StudioCmd::UpdateProject(p, a)) => {
-                    project = p;
+                    project = *p;
                     anchor = a;
                     current_time = current_time.clamp(0.0, project.duration);
                     force_eval = true;

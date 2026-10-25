@@ -328,6 +328,70 @@ export type FinishedRecording = {
   keyframes: Keyframe[];
 };
 
+export type AvatarIntegrationState =
+  | "idle"
+  | "configuring"
+  | "ready"
+  | "previewing"
+  | "playing"
+  | "stopped"
+  | "error";
+
+export type BoneRigSample = {
+  index: number;
+  arcFraction: number;
+  position: [number, number, number];
+  tangent: [number, number, number];
+  arrowRot: [number, number, number];
+  cameraRot: [number, number, number];
+};
+
+export type RigRepresentationStatus =
+  | "ready"
+  | { pendingVrcLimitations: string };
+
+export type AvatarPathRigSnapshot = {
+  boneCount: number;
+  totalDistanceM: number;
+  samples: BoneRigSample[];
+  status: RigRepresentationStatus;
+  cameraPoseNow: Pose | null;
+  cameraForwardNow: [number, number, number] | null;
+};
+
+export type AvatarIntegrationConfig = {
+  schemaVersion: number;
+  enabled: boolean;
+  sendHost: string;
+  sendPort: number;
+  listenPort: number;
+  minDuration: number;
+  maxDuration: number;
+  boneCount: number;
+  rigScale: number;
+  coordinateSystem: string;
+  autoRearm: boolean;
+  logDiagnostics: boolean;
+};
+
+export type AvatarIntegrationSnapshot = {
+  protocolVersion: string;
+  state: AvatarIntegrationState;
+  lastAction: number;
+  actionArmed: boolean;
+  currentAvatarId: string | null;
+  durationSeconds: number;
+  durationNormalized: number;
+  anchorMode: number;
+  pathType: number;
+  looping: boolean;
+  assetVisible: boolean;
+  hasPointA: boolean;
+  hasPointB: boolean;
+  lastError: string | null;
+  rigSnapshot: AvatarPathRigSnapshot;
+};
+
 export const api = {
   connect: () => invoke<void>("connect"),
   status: () => invoke<Status>("status"),
@@ -387,4 +451,16 @@ export const api = {
   importVrcDolly: (raw: string) => invoke<SequenceProject>("import_vrc_dolly_cmd", { raw }),
   exportVrcDolly: (project: SequenceProject, bakeEffects: boolean) =>
     invoke<string>("export_vrc_dolly_cmd", { project, bakeEffects }),
+
+  // Avatar Asset Integration (VRCFury) & Path Trajectory
+  avatarStatus: () => invoke<AvatarIntegrationSnapshot>("avatar_status"),
+  avatarConfig: () => invoke<AvatarIntegrationConfig>("avatar_config"),
+  saveAvatarConfig: (config: AvatarIntegrationConfig) =>
+    invoke<AvatarIntegrationConfig>("save_avatar_config", { config }),
+  triggerAvatarAction: (action: number) =>
+    invoke<AvatarIntegrationSnapshot>("trigger_avatar_action", { action }),
+  fitKeyframesToDuration: (project: SequenceProject, targetDuration: number) =>
+    invoke<SequenceProject>("fit_keyframes_to_duration", { project, targetDuration }),
+  sampleBasePoseAt: (project: SequenceProject, time: number) =>
+    invoke<Pose>("sample_base_pose_at", { project, time }),
 };
