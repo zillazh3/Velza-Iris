@@ -34,6 +34,9 @@
     Sun,
     Palette,
     Keyboard,
+    Download,
+    FolderOpen,
+    FileCode,
   } from "@lucide/svelte";
   import { api, type Preset, type SequenceProject, type Status } from "$lib/api";
   import { i18n, t, pointLabel, localizeError, localizePresetName, type Key } from "$lib/i18n/index.svelte";
@@ -239,6 +242,66 @@
     }, t("toast.dollyCopied", { name: seq.name }));
   }
 
+  function downloadJsonFile(filename: string, content: string) {
+    const blob = new Blob([content], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  function downloadSequenceFile(seq: SequenceProject) {
+    const raw = JSON.stringify(seq, null, 2);
+    const safeName = seq.name.toLowerCase().replace(/[^a-z0-9_-]/g, "_") || "sequence";
+    downloadJsonFile(`${safeName}.iris.json`, raw);
+    message = { text: t("toast.jsonCopied", { name: `${safeName}.iris.json` }), ok: true };
+  }
+
+  async function downloadDollyFile(seq: SequenceProject, bakeEffects: boolean) {
+    await run(async () => {
+      const raw = await api.exportVrcDolly(seq, bakeEffects);
+      const safeName = seq.name.toLowerCase().replace(/[^a-z0-9_-]/g, "_") || "sequence";
+      downloadJsonFile(`${safeName}.vrc-dolly.json`, raw);
+    }, t("toast.dollyCopied", { name: seq.name }));
+  }
+
+  let fileInputEl = $state<HTMLInputElement | null>(null);
+  let isDraggingFile = $state(false);
+
+  function handleFileRead(file: File) {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const text = e.target?.result;
+      if (typeof text === "string") {
+        importJsonText = text;
+        message = { text: t("library.fileLoaded", { name: file.name }), ok: true };
+      }
+    };
+    reader.readAsText(file);
+  }
+
+  function handleFileInputChange(e: Event) {
+    const target = e.target as HTMLInputElement;
+    const file = target.files?.[0];
+    if (file) {
+      handleFileRead(file);
+      target.value = "";
+    }
+  }
+
+  function handleFileDrop(e: DragEvent) {
+    e.preventDefault();
+    isDraggingFile = false;
+    const file = e.dataTransfer?.files?.[0];
+    if (file) {
+      handleFileRead(file);
+    }
+  }
+
   async function handleImportSequence() {
     if (!importJsonText.trim()) return;
     await run(async () => {
@@ -307,6 +370,7 @@
         <Aperture size={22} />
         <span class="text">{t("app.title")}</span>
       </h1>
+      <span class="brand-version text">Velza Iris v0.1.0</span>
     </div>
 
     <ul class="nav-list">
@@ -605,10 +669,26 @@
                 <button
                   type="button"
                   class="ghost sm"
+                  title={t("library.exportFile")}
+                  onclick={() => downloadSequenceFile(seq)}
+                >
+                  <Download size={14} /> .iris.json
+                </button>
+                <button
+                  type="button"
+                  class="ghost sm"
                   title={t("library.dollyTooltip")}
                   onclick={() => copyDollyJson(seq, true)}
                 >
                   <Copy size={14} /> Dolly JSON
+                </button>
+                <button
+                  type="button"
+                  class="ghost sm"
+                  title={t("library.exportDollyFile")}
+                  onclick={() => downloadDollyFile(seq, true)}
+                >
+                  <Download size={14} /> Dolly .json
                 </button>
                 {#if !seq.id.startsWith("seed-")}
                   <button
@@ -625,13 +705,51 @@
           {/each}
         </div>
 
-        <div class="card import-box">
-          <h4><Upload size={15} /> {t("library.importJson")} / VRChat Camera Dolly</h4>
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
+        <div
+          class="card import-box"
+          class:is-dragging={isDraggingFile}
+          ondragover={(e) => { e.preventDefault(); isDraggingFile = true; }}
+          ondragleave={() => (isDraggingFile = false)}
+          ondrop={handleFileDrop}
+        >
+          <div class="import-box-head">
+            <h4><Upload size={15} /> {t("library.importJson")} / VRChat Camera Dolly</h4>
+            <div class="import-head-actions">
+              <input
+                type="file"
+                accept=".json,.iris"
+                class="sr-only"
+                bind:this={fileInputEl}
+                onchange={handleFileInputChange}
+              />
+              <button
+                type="button"
+                class="ghost sm"
+                onclick={() => fileInputEl?.click()}
+                title={t("library.importFile")}
+              >
+                <FolderOpen size={14} /> {t("library.importFile")}
+              </button>
+              {#if importJsonText.trim()}
+                <button
+                  type="button"
+                  class="ghost sm"
+                  onclick={() => (importJsonText = "")}
+                >
+                  {t("curve.reset")}
+                </button>
+              {/if}
+            </div>
+          </div>
+
           <textarea
-            rows="3"
-            placeholder={t("library.importPlaceholder")}
+            rows={importJsonText.trim().length > 0 ? 12 : 3}
+            class="import-json-textarea"
+            placeholder={`${t("library.importPlaceholder")} (${t("library.dropFile")})`}
             bind:value={importJsonText}
           ></textarea>
+
           <div class="card-actions">
             <button
               type="button"
@@ -880,6 +998,11 @@
     color: var(--royal);
     border-color: rgba(51, 82, 234, 0.25);
   }
+  .brand-wrap {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
   .brand {
     display: flex;
     align-items: center;
@@ -889,6 +1012,18 @@
     font-weight: 500;
     font-size: 1.3rem;
     color: var(--lavender);
+  }
+  .brand-version {
+    font-size: 0.68rem;
+    color: var(--text-muted);
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    padding-left: 38px;
+    margin-top: -2px;
+    user-select: none;
+  }
+  :global(:root[data-theme="light"]) .brand-version {
+    color: var(--text-2);
   }
   .nav-list {
     list-style: none;
@@ -1160,16 +1295,51 @@
     display: flex;
     flex-direction: column;
     gap: 10px;
+    transition: border-color 150ms ease, box-shadow 150ms ease;
   }
-  .import-box h4 {
+  .import-box.is-dragging {
+    border-color: var(--accent);
+    box-shadow: 0 0 16px var(--accent-glow);
+  }
+  .import-box-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .import-box-head h4 {
     display: flex;
     align-items: center;
     gap: 6px;
     margin: 0;
   }
+  .import-head-actions {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+  }
+  .import-json-textarea {
+    width: 100%;
+    background: var(--surface, #0e0a1a);
+    color: var(--text);
+    border: 1px solid rgba(184, 169, 255, 0.2);
+    border-radius: 10px;
+    padding: 10px 12px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-size: 0.8rem;
+    line-height: 1.45;
+    transition: height 200ms var(--ease), border-color 150ms ease;
+    resize: vertical;
+  }
+  :global(:root[data-theme="light"]) .import-json-textarea {
+    background: #ffffff;
+    border-color: rgba(0, 0, 0, 0.12);
+    color: #12101a;
+  }
   textarea {
     width: 100%;
-    background: #0e0a1a;
+    background: var(--surface, #0e0a1a);
     color: var(--text);
     border: 1px solid rgba(184, 169, 255, 0.2);
     border-radius: 10px;

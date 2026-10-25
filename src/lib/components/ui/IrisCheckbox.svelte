@@ -11,6 +11,7 @@
     id?: string;
     class?: string;
     style?: string;
+    title?: string;
     onchange?: (checked: boolean) => void;
   }
 
@@ -24,6 +25,7 @@
     id,
     class: className = "",
     style = "",
+    title = "",
     onchange,
   }: Props = $props();
 
@@ -53,6 +55,7 @@
   class:is-checked={checked}
   class:is-disabled={disabled}
   {style}
+  title={title || undefined}
 >
   <input
     {id}

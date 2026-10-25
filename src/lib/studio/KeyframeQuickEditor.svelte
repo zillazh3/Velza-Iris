@@ -5,7 +5,7 @@
   import IrisSelect, { type SelectOption } from "$lib/components/ui/IrisSelect.svelte";
   import IrisCheckbox from "$lib/components/ui/IrisCheckbox.svelte";
   import CurveEditorModal, { type BezierCurve } from "$lib/components/ui/CurveEditorModal.svelte";
-  import { t } from "$lib/i18n/index.svelte";
+  import { t, formatKeyframeLabel } from "$lib/i18n/index.svelte";
 
   interface Props {
     open: boolean;
@@ -40,13 +40,13 @@
   let adjustedY = $state(0);
   let showCurveEditor = $state(false);
 
-  const transitionOptions: SelectOption[] = [
-    { value: "linear", label: "Linear (Constante)", description: "Velocidad uniforme" },
-    { value: "smooth", label: "Smooth (Natural)", description: "Cosine In-Out orgánico" },
-    { value: "slowIn", label: "Slow In (Ease In)", description: "Aceleración progresiva" },
-    { value: "slowOut", label: "Slow Out (Ease Out)", description: "Frenado suave" },
-    { value: "smoothInOut", label: "Smooth In & Out", description: "Cubic S-Curve" },
-  ];
+  const transitionOptions = $derived<SelectOption[]>([
+    { value: "linear", label: t("curve.preset.linear"), description: t("curve.preset.linearDesc") },
+    { value: "smooth", label: t("curve.preset.smooth"), description: t("quickEdit.smoothDesc") },
+    { value: "slowIn", label: t("curve.preset.slowIn"), description: t("quickEdit.slowInDesc") },
+    { value: "slowOut", label: t("curve.preset.slowOut"), description: t("curve.preset.slowOutDesc") },
+    { value: "smoothInOut", label: t("curve.preset.smoothInOut"), description: t("curve.preset.smoothInOutDesc") },
+  ]);
 
   $effect(() => {
     if (open) {
@@ -102,7 +102,7 @@
     style="left: {adjustedX}px; top: {adjustedY}px;"
     role="dialog"
     tabindex="-1"
-    aria-label="Editor rápido de Keyframe"
+    aria-label={t("quickEdit.titleAria")}
   >
     <div class="pop-head">
       <div class="pop-title">
@@ -112,7 +112,7 @@
           class="title-input"
           bind:value={keyframe.label}
           oninput={onchange}
-          title="Editar etiqueta del punto"
+          title={t("quickEdit.editLabel")}
         />
       </div>
       <button type="button" class="ghost icon-btn" onclick={onclose} aria-label="Cerrar">
@@ -154,11 +154,11 @@
 
       <div class="pop-field">
         <div class="pop-field-head">
-          <span class="pop-label">Curva de aceleración</span>
+          <span class="pop-label">{t("quickEdit.curveLabel")}</span>
           <button
             type="button"
             class="curve-tool-btn"
-            title="Abrir editor de curvas Bézier personalizadas"
+            title={t("quickEdit.curveBtn")}
             onclick={() => (showCurveEditor = true)}
           >
             <Sparkles size={12} /> Curva Custom
@@ -180,8 +180,8 @@
           variant="switch"
           size="sm"
           checked={keyframe.knotMode === "stop"}
-          label="Parada completa en este punto"
-          description={keyframe.knotMode === "stop" ? "La cámara frena a cero velocidad" : "Crucero continuo sin detenerse"}
+          label={t("quickEdit.stopLabel")}
+          description={keyframe.knotMode === "stop" ? t("quickEdit.stopDesc") : t("quickEdit.passDesc")}
           onchange={(isStop) => {
             keyframe.knotMode = isStop ? "stop" : "passThrough";
             onchange();
@@ -199,15 +199,15 @@
           type="button"
           class="ghost sm"
           disabled={!canUpdateFromCamera}
-          title="Captura la posición actual de tu cámara en VRChat"
+          title={t("quickEdit.captureTooltip")}
           onclick={onupdate}
         >
-          <Camera size={13} /> Actualizar
+          <Camera size={13} /> {t("studio.updatePoint")}
         </button>
-        <button type="button" class="ghost sm" title="Duplicar este punto" onclick={onduplicate}>
-          <Copy size={13} /> Duplicar
+        <button type="button" class="ghost sm" title={t("quickEdit.dupTooltip")} onclick={onduplicate}>
+          <Copy size={13} /> {t("studio.ctx.duplicate")}
         </button>
-        <button type="button" class="ghost sm danger" title="Eliminar punto" onclick={ondelete}>
+        <button type="button" class="ghost sm danger" title={t("quickEdit.delTooltip")} onclick={ondelete}>
           <Trash2 size={13} />
         </button>
       </div>
@@ -218,7 +218,7 @@
     <CurveEditorModal
       open={showCurveEditor}
       curve={(keyframe as any).customCurve ?? [0.4, 0.0, 0.2, 1.0]}
-      title={`Curva Bézier — ${keyframe.label}`}
+      title={t("quickEdit.bezierTitle", { label: formatKeyframeLabel(keyframe.label) })}
       onapply={handleCustomCurveApply}
       onclose={() => (showCurveEditor = false)}
     />

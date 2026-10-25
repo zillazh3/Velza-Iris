@@ -59,7 +59,7 @@
     type TrajectoryPreview,
     type Transition,
   } from "$lib/api";
-  import { t, pointLabel, localizeError, localizeMotionName, type Key } from "$lib/i18n/index.svelte";
+  import { t, pointLabel, formatKeyframeLabel, localizeError, localizeMotionName, type Key } from "$lib/i18n/index.svelte";
   import { createEffectClip, EFFECT_CATALOG, getEffectDesc, getEffectParamALabel, getEffectParamBLabel, type EffectCategory } from "$lib/studio/catalog";
   import {
     adaptiveSnapStep,
@@ -349,7 +349,7 @@
       selectedEffectId = null;
       playheadTime = 0;
       await refreshMathPreview(false);
-    }, `Movimiento «${name}» cargado como secuencia editable en Iris Studio.`);
+    }, t("studio.loadedMotion", { name }));
   }
 
   async function restoreCalibrationDefaults() {
@@ -626,7 +626,7 @@
     const copy: Keyframe = {
       ...structuredClone(selectedKeyframe),
       id: `kf-dup-${Date.now()}`,
-      label: `${selectedKeyframe.label} (copia)`,
+      label: `${selectedKeyframe.label} ${t("studio.copySuffix")}`,
       time: newTime,
     };
     activeProject.keyframes = [...activeProject.keyframes, copy].sort((a, b) => a.time - b.time);
@@ -805,7 +805,7 @@
       y: e.clientY,
       items: [
         {
-          label: `${t("studio.ctx.editProps")} (${kf.label})`,
+          label: `${t("studio.ctx.editProps")} (${formatKeyframeLabel(kf.label)})`,
           icon: Sliders,
           action: () => {
             quickEditorState = { open: true, keyframe: kf, x: e.clientX, y: e.clientY };
@@ -873,7 +873,7 @@
       y: e.clientY,
       items: [
         {
-          label: `${entry ? t(entry.labelKey) : ef.kind} (${ef.enabled ? "Desactivar" : "Activar"})`,
+          label: `${entry ? t(entry.labelKey) : ef.kind} (${ef.enabled ? t("studio.action.deactivate") : t("studio.action.activate")})`,
           icon: Sparkles,
           action: () => {
             ef.enabled = !ef.enabled;
@@ -1229,6 +1229,17 @@
     });
   }
 
+  // Reproducción unificada (En Vivo si VRChat está abierto, o Vista Previa local)
+  async function handleTogglePlayback() {
+    if (playbackStatus.state === "playing") {
+      await api.studioControl("pause");
+      return;
+    }
+    if (activeProject.keyframes.length === 0) return;
+    const liveOsc = Boolean(status.connected && status.open);
+    await startPlayback(liveOsc);
+  }
+
   async function toggleRecording() {
     if (!recordingActive) {
       await run(async () => {
@@ -1467,8 +1478,7 @@
 
     const unsubs = [
       shortcutManager.registerAction("playPause", () => {
-        if (playbackStatus.state === "playing") api.studioControl("pause");
-        else if (activeProject.keyframes.length > 0) startPlayback(false);
+        void handleTogglePlayback();
       }),
       shortcutManager.registerAction("shuttleStop", () => {
         void api.stopStudio();
@@ -2070,21 +2080,12 @@
         {:else}
           <button
             type="button"
-            class="ghost sm"
-            disabled={activeProject.keyframes.length === 0}
-            title={t("studio.previewTooltip")}
-            onclick={() => startPlayback(false)}
-          >
-            <Eye size={15} /> {t("studio.previewPlay")}
-          </button>
-          <button
-            type="button"
             class="primary sm"
-            disabled={activeProject.keyframes.length === 0 || !status.connected || !status.open}
-            title={t("studio.livePlayTooltip")}
-            onclick={() => startPlayback(true)}
+            disabled={activeProject.keyframes.length === 0}
+            title={status.connected && status.open ? t("studio.playTooltipVrc") : t("studio.playTooltipPreview")}
+            onclick={handleTogglePlayback}
           >
-            <Play size={15} /> {t("studio.livePlay")}
+            <Play size={15} /> {t("studio.play")}
           </button>
         {/if}
 
@@ -2175,11 +2176,6 @@
                 {/each}
               </div>
 
-              <!-- Guía de origen 0.0s -->
-              <div class="tl-origin-line" style="left: 0%">
-                <span class="tl-origin-badge">0.0s</span>
-              </div>
-
             <!-- Pista 1: Recorrido de cámara (Puntos A, B, C...) con segmentos estirables -->
             <!-- svelte-ignore a11y_no_static_element_interactions -->
             <div
@@ -2208,7 +2204,7 @@
                   <div
                     class="kf-segment-bar"
                     style="left: {segLeftPct}%; width: {segWidthPct}%;"
-                    title="Segmento {kf.label} → {nextKf.label} ({segDuration.toFixed(2)}s). Arrastra el extremo derecho para estirar duración."
+                    title={t("studio.segmentStretchTooltip", { from: formatKeyframeLabel(kf.label), to: formatKeyframeLabel(nextKf.label), duration: segDuration.toFixed(2) })}
                   >
                     <span class="seg-fill"></span>
                     <span class="seg-badge">{segDuration.toFixed(1)}s</span>
@@ -2238,7 +2234,7 @@
                   class="kf-pill"
                   class:selected={selectedKeyframeId === kf.id}
                   style="left: {leftPct}%"
-                  title="{kf.label} ({kf.time.toFixed(2)}s) — Doble click para editar rápido, click derecho para menú"
+                  title={t("studio.keyframeTooltip", { label: formatKeyframeLabel(kf.label), time: kf.time.toFixed(2) })}
                   onpointerdown={(e) => {
                     e.stopPropagation();
                     pushUndoSnapshot();
@@ -2256,7 +2252,7 @@
                   oncontextmenu={(e) => openKeyframeContextMenu(kf, e)}
                 >
                   <span class="kf-dot"></span>
-                  <span>{kf.label}</span>
+                  <span>{formatKeyframeLabel(kf.label)}</span>
                   <small>{kf.time.toFixed(1)}s</small>
                 </button>
               {/each}
@@ -2504,7 +2500,7 @@
               <!-- svelte-ignore a11y_no_static_element_interactions -->
               <div
                 class="lib-item draggable-item"
-                title="Arrastra este efecto directamente sobre una Pista FX en el timeline, o presiona + para insertarlo en el cursor"
+                title={t("studio.effectItemTooltip")}
                 onpointerdown={(e) => onLibraryItemPointerDown(item.kind, e)}
               >
                 <div>
@@ -3322,8 +3318,8 @@
                 type="button"
                 class="primary sm icon-only play-toggle-btn"
                 disabled={activeProject.keyframes.length === 0}
-                onclick={() => startPlayback(false)}
-                title={t("studio.previewPlay")}
+                onclick={handleTogglePlayback}
+                title={status.connected && status.open ? t("studio.playTooltipVrc") : t("studio.playTooltipPreview")}
               >
                 <Play size={14} />
               </button>
@@ -3355,18 +3351,6 @@
             </button>
           </div>
 
-          {#if status.connected && status.open}
-            <button
-              type="button"
-              class="ghost sm live-play-btn"
-              disabled={activeProject.keyframes.length === 0}
-              onclick={() => startPlayback(true)}
-              title={t("studio.livePlay")}
-            >
-              <Play size={13} /> {t("studio.livePlay")}
-            </button>
-          {/if}
-
           <span class="time-readout">
             {formatTimeReadout(playheadTime, activeProject.duration)} /
             {formatTimeReadout(activeProject.duration, activeProject.duration)}
@@ -3384,10 +3368,13 @@
             <Sliders size={14} /> {t("studio.config.button")} ({formatSecondsToMmSs(activeProject.duration)})
           </button>
 
-          <label class="scale-check" title={t("studio.liveScrubLabel")}>
-            <input type="checkbox" bind:checked={liveScrub} />
-            <span>Live Scrub OSC</span>
-          </label>
+          <IrisCheckbox
+            variant="checkbox"
+            size="sm"
+            bind:checked={liveScrub}
+            label="Live Scrub OSC"
+            title={t("studio.liveScrubLabel")}
+          />
 
           <button
             type="button"
@@ -3435,11 +3422,6 @@
               {/each}
             </div>
 
-            <!-- Guía de origen 0.0s -->
-            <div class="tl-origin-line" style="left: 0%">
-              <span class="tl-origin-badge">0.0s</span>
-            </div>
-
           <!-- Pista 1: Trayectoria 3D (Posición X/Y/Z) con segmentos estirables -->
           <div class="tl-lane track-pos">
             <span class="lane-label"><Video size={12} /> {t("studio.trackPath")} (X/Y/Z)</span>
@@ -3455,7 +3437,7 @@
                 <div
                   class="kf-segment-bar"
                   style="left: {segLeftPct}%; width: {segWidthPct}%;"
-                  title="Segmento {kf.label} → {nextKf.label} ({segDuration.toFixed(2)}s). Arrastra el extremo derecho para estirar."
+                  title={t("studio.segmentStretchTooltip", { from: formatKeyframeLabel(kf.label), to: formatKeyframeLabel(nextKf.label), duration: segDuration.toFixed(2) })}
                 >
                   <span class="seg-fill"></span>
                   <span class="seg-badge">{segDuration.toFixed(1)}s</span>
@@ -3485,7 +3467,7 @@
                 class="kf-pill"
                 class:selected={selectedKeyframeId === kf.id}
                 style="left: {leftPct}%"
-                title="{kf.label} ({kf.time.toFixed(2)}s) — Doble click para editar rápido, click derecho para menú"
+                title={t("studio.keyframeTooltip", { label: formatKeyframeLabel(kf.label), time: kf.time.toFixed(2) })}
                 onpointerdown={(e) => {
                   e.stopPropagation();
                   pushUndoSnapshot();
@@ -3503,7 +3485,7 @@
                 oncontextmenu={(e) => openKeyframeContextMenu(kf, e)}
               >
                 <span class="kf-dot"></span>
-                <span>{kf.label}</span>
+                <span>{formatKeyframeLabel(kf.label)}</span>
                 <small>{kf.time.toFixed(1)}s</small>
               </button>
             {/each}
@@ -3559,7 +3541,7 @@
               class:is-drop-target={hoveredFxTrack === trackIdx}
               bind:this={fxLaneEls[trackIdx]}
             >
-              <span class="lane-label"><Layers size={12} /> Pista FX {trackIdx + 1}</span>
+              <span class="lane-label"><Layers size={12} /> {t("studio.trackFx", { n: trackIdx + 1 })}</span>
               {#each activeProject.effects.filter((e) => e.track === trackIdx) as ef (ef.id)}
                 {@const startPct = (ef.startTime / Math.max(0.1, activeProject.duration)) * 100}
                 {@const widthPct = Math.max(
@@ -3573,7 +3555,7 @@
                   class:selected={selectedEffectId === ef.id}
                   class:disabled={!ef.enabled}
                   style="left: {startPct}%; width: {widthPct}%"
-                  title="{catEntry ? t(catEntry.labelKey) : ef.kind} ({ef.startTime.toFixed(1)}–{(ef.startTime + ef.duration).toFixed(1)}s) — Click derecho para opciones"
+                  title={t("studio.effectClipTooltip", { name: catEntry ? t(catEntry.labelKey) : ef.kind, start: ef.startTime.toFixed(1), end: (ef.startTime + ef.duration).toFixed(1) })}
                   onpointerdown={(e) => {
                     e.stopPropagation();
                     pushUndoSnapshot();
@@ -3680,7 +3662,7 @@
         {t(EFFECT_CATALOG.find((c) => c.kind === dragged.kind)?.labelKey ?? dragged.kind)}
       </span>
       {#if hoveredFxTrack !== null}
-        <span class="ghost-target-pill">Pista FX {hoveredFxTrack + 1}</span>
+        <span class="ghost-target-pill">{t("studio.trackFx", { n: hoveredFxTrack + 1 })}</span>
       {/if}
     </div>
   {/if}
@@ -4066,32 +4048,6 @@
     gap: 6px;
     margin: 0 36px;
   }
-  .tl-origin-line {
-    position: absolute;
-    top: 0;
-    bottom: 0;
-    width: 2px;
-    background: linear-gradient(180deg, var(--lavender) 0%, rgba(184, 169, 255, 0.25) 100%);
-    pointer-events: none;
-    z-index: 4;
-    box-shadow: 0 0 8px rgba(184, 169, 255, 0.4);
-  }
-  .tl-origin-badge {
-    position: absolute;
-    top: -2px;
-    left: 50%;
-    transform: translateX(-50%);
-    font-size: 0.62rem;
-    font-weight: 700;
-    letter-spacing: 0.04em;
-    color: #ffffff;
-    background: rgba(39, 65, 200, 0.85);
-    border: 1px solid rgba(184, 169, 255, 0.45);
-    border-radius: 4px;
-    padding: 1px 5px;
-    white-space: nowrap;
-    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
-  }
   .tl-ruler {
     position: relative;
     height: 22px;
@@ -4435,10 +4391,41 @@
     max-width: 100%;
     overflow-x: hidden;
   }
-  .insp-body input[type="range"] {
+  .insp-body input[type="range"],
+  .qi-sliders input[type="range"] {
+    -webkit-appearance: none;
+    appearance: none;
     width: 100%;
     max-width: 100%;
+    height: 5px;
+    border-radius: 999px;
+    background: rgba(184, 169, 255, 0.18);
+    outline: none;
+    cursor: pointer;
     box-sizing: border-box;
+    transition: background 150ms ease;
+  }
+  .insp-body input[type="range"]:hover,
+  .qi-sliders input[type="range"]:hover {
+    background: rgba(184, 169, 255, 0.32);
+  }
+  .insp-body input[type="range"]::-webkit-slider-thumb,
+  .qi-sliders input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: var(--accent, #3d5afe);
+    border: 2px solid #ffffff;
+    box-shadow: 0 0 6px var(--accent-glow, rgba(61, 90, 254, 0.45));
+    cursor: grab;
+    transition: transform 120ms ease, box-shadow 120ms ease;
+  }
+  .insp-body input[type="range"]::-webkit-slider-thumb:hover,
+  .qi-sliders input[type="range"]::-webkit-slider-thumb:hover {
+    transform: scale(1.2);
+    box-shadow: 0 0 10px var(--accent-glow, rgba(61, 90, 254, 0.65));
   }
   .insp-body input[type="number"],
   .insp-body input[type="text"] {
@@ -4537,51 +4524,90 @@
     align-items: center;
     background: rgba(14, 10, 26, 0.6);
     border: 1px solid rgba(184, 169, 255, 0.16);
-    border-radius: 10px;
-    padding: 2px;
-    gap: 1px;
+    border-radius: 12px;
+    padding: 3px;
+    gap: 2px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
   }
   .transport-nav-group :global(.icon-only) {
-    padding: 5px 7px;
-    border-radius: 7px;
+    padding: 5px 8px;
+    border-radius: 8px;
     border: 0;
     color: var(--text-2);
-    min-width: 28px;
-    height: 28px;
+    min-width: 30px;
+    height: 30px;
     display: inline-flex;
     align-items: center;
     justify-content: center;
     background: transparent;
+    transition: background 120ms ease, color 120ms ease, transform 100ms ease;
   }
   .transport-nav-group :global(.icon-only:hover:not(:disabled)) {
     background: rgba(184, 169, 255, 0.12);
     color: var(--text);
   }
+  .transport-nav-group :global(.icon-only:active:not(:disabled)) {
+    transform: scale(0.95);
+  }
   .transport-nav-group :global(.play-toggle-btn) {
     background: var(--accent) !important;
-    color: #ffffff !important;
+    color: var(--accent-foreground, #ffffff) !important;
     font-weight: 600;
-    padding: 5px 9px;
+    min-width: 36px;
+    height: 30px;
+    padding: 5px 12px;
+    border-radius: 9px;
+    box-shadow: 0 0 10px var(--accent-glow);
+    transition: filter 120ms ease, box-shadow 120ms ease, transform 100ms ease;
   }
   .transport-nav-group :global(.play-toggle-btn:hover:not(:disabled)) {
     filter: brightness(1.15);
-    box-shadow: 0 0 12px var(--accent-glow);
+    box-shadow: 0 0 16px var(--accent-glow);
+    transform: scale(1.04);
   }
-  .live-play-btn {
-    border-color: rgba(61, 90, 254, 0.4);
-    color: var(--lavender);
-  }
-  .live-play-btn:hover:not(:disabled) {
-    border-color: var(--accent);
-    color: #ffffff;
-    background: rgba(61, 90, 254, 0.15);
+  .transport-nav-group :global(.play-toggle-btn:active:not(:disabled)) {
+    transform: scale(0.96);
   }
   .zoom-slider {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     font-size: 0.78rem;
     color: var(--text-2);
+    background: rgba(14, 10, 26, 0.5);
+    border: 1px solid rgba(184, 169, 255, 0.14);
+    border-radius: 10px;
+    padding: 4px 10px;
+  }
+  .zoom-slider input[type="range"] {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 85px;
+    height: 4px;
+    border-radius: 999px;
+    background: rgba(184, 169, 255, 0.2);
+    outline: none;
+    cursor: pointer;
+    transition: background 150ms ease;
+  }
+  .zoom-slider input[type="range"]:hover {
+    background: rgba(184, 169, 255, 0.35);
+  }
+  .zoom-slider input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: var(--accent, #3d5afe);
+    border: 2px solid #ffffff;
+    box-shadow: 0 0 6px var(--accent-glow, rgba(61, 90, 254, 0.5));
+    cursor: grab;
+    transition: transform 120ms ease, box-shadow 120ms ease;
+  }
+  .zoom-slider input[type="range"]::-webkit-slider-thumb:hover {
+    transform: scale(1.2);
+    box-shadow: 0 0 10px var(--accent-glow, rgba(61, 90, 254, 0.7));
   }
   .ed-tl-scroll {
     overflow-x: auto;
@@ -4794,5 +4820,154 @@
     border: 1px solid var(--accent);
     color: var(--lavender);
     background: rgba(61, 90, 254, 0.15);
+  }
+
+  /* =========================================================================
+     MODO CLARO (WHITE THEME) PARA VELZA IRIS STUDIO
+     ========================================================================= */
+  :global(:root[data-theme="light"]) .seq-picker {
+    background: #f7f6fb;
+    border-color: rgba(0, 0, 0, 0.08);
+    color: var(--royal);
+  }
+  :global(:root[data-theme="light"]) .project-name-input,
+  :global(:root[data-theme="light"]) input[type="text"],
+  :global(:root[data-theme="light"]) input[type="number"],
+  :global(:root[data-theme="light"]) input[type="search"],
+  :global(:root[data-theme="light"]) select {
+    background: #ffffff;
+    color: #12101a;
+    border-color: rgba(0, 0, 0, 0.12);
+  }
+  :global(:root[data-theme="light"]) .mode-switch {
+    background: #eae8f2;
+    border-color: rgba(0, 0, 0, 0.08);
+  }
+  :global(:root[data-theme="light"]) .mode-tab {
+    color: #575269;
+  }
+  :global(:root[data-theme="light"]) .mode-tab.active {
+    background: var(--accent);
+    color: #ffffff;
+  }
+  :global(:root[data-theme="light"]) .project-config-panel {
+    background: linear-gradient(180deg, #f7f6fc 0%, #ece9f7 100%);
+    border-color: rgba(0, 0, 0, 0.1);
+  }
+  :global(:root[data-theme="light"]) .timeline-lanes,
+  :global(:root[data-theme="light"]) .ed-tl-canvas {
+    background: #ffffff;
+    border-color: rgba(0, 0, 0, 0.08);
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.03);
+  }
+  :global(:root[data-theme="light"]) .tl-ruler {
+    border-bottom-color: rgba(0, 0, 0, 0.08);
+  }
+  :global(:root[data-theme="light"]) .tl-lane {
+    background: #f4f3f9;
+    border-color: rgba(0, 0, 0, 0.06);
+  }
+  :global(:root[data-theme="light"]) .lane-label {
+    color: #6d58c9;
+  }
+  :global(:root[data-theme="light"]) .telemetry-bar {
+    background: #ffffff;
+    border-color: rgba(0, 0, 0, 0.08);
+    box-shadow: 0 4px 18px rgba(0, 0, 0, 0.03);
+  }
+  :global(:root[data-theme="light"]) .tele-col code {
+    background: #f4f3f9;
+    color: #12101a;
+  }
+  :global(:root[data-theme="light"]) .library-pane {
+    background: #ffffff;
+    border-color: rgba(0, 0, 0, 0.08);
+  }
+  :global(:root[data-theme="light"]) .lib-item {
+    background: #f7f6fb;
+    border-color: rgba(0, 0, 0, 0.06);
+  }
+  :global(:root[data-theme="light"]) .lib-item:hover {
+    background: #eeeaf8;
+    border-color: rgba(109, 88, 201, 0.2);
+  }
+  :global(:root[data-theme="light"]) .lib-tab {
+    background: rgba(0, 0, 0, 0.04);
+    color: #575269;
+  }
+  :global(:root[data-theme="light"]) .lib-tab:hover {
+    background: rgba(0, 0, 0, 0.08);
+    color: #12101a;
+  }
+  :global(:root[data-theme="light"]) .lib-tab.active {
+    background: var(--accent);
+    color: #ffffff;
+  }
+  :global(:root[data-theme="light"]) .inspector-pane {
+    background: #ffffff;
+    border-color: rgba(0, 0, 0, 0.08);
+  }
+  :global(:root[data-theme="light"]) .insp-card,
+  :global(:root[data-theme="light"]) .insp-accordion {
+    background: #ffffff;
+    border-color: rgba(0, 0, 0, 0.08);
+  }
+  :global(:root[data-theme="light"]) .insp-accordion-btn {
+    background: #f7f6fb;
+    border-color: rgba(0, 0, 0, 0.08);
+    color: var(--royal);
+  }
+  :global(:root[data-theme="light"]) .insp-accordion-btn:hover {
+    background: #eeeaf8;
+  }
+  :global(:root[data-theme="light"]) .quick-inspector {
+    background: rgba(255, 255, 255, 0.96);
+    border-color: rgba(0, 0, 0, 0.1);
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.12);
+  }
+  :global(:root[data-theme="light"]) .transport-nav-group {
+    background: #eae8f2;
+    border-color: rgba(0, 0, 0, 0.08);
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.05);
+  }
+  :global(:root[data-theme="light"]) .transport-nav-group :global(.icon-only) {
+    color: #575269;
+  }
+  :global(:root[data-theme="light"]) .transport-nav-group :global(.icon-only:hover:not(:disabled)) {
+    background: rgba(0, 0, 0, 0.06);
+    color: #12101a;
+  }
+  :global(:root[data-theme="light"]) .zoom-slider {
+    background: #eae8f2;
+    border-color: rgba(0, 0, 0, 0.08);
+    color: #575269;
+  }
+  :global(:root[data-theme="light"]) .zoom-slider input[type="range"] {
+    background: rgba(0, 0, 0, 0.12);
+  }
+  :global(:root[data-theme="light"]) .dur-preset-strip {
+    background: #eae8f2;
+    border-color: rgba(0, 0, 0, 0.08);
+  }
+  :global(:root[data-theme="light"]) .dur-pill {
+    color: #575269;
+  }
+  :global(:root[data-theme="light"]) .dur-pill:hover {
+    background: rgba(0, 0, 0, 0.06);
+    color: #12101a;
+  }
+  :global(:root[data-theme="light"]) .kf-card {
+    background: #f7f6fb;
+    border-color: rgba(0, 0, 0, 0.06);
+  }
+  :global(:root[data-theme="light"]) .seg-badge {
+    background: #ffffff;
+    color: var(--royal);
+    border-color: rgba(0, 0, 0, 0.12);
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
+  }
+  :global(:root[data-theme="light"]) .insp-body input[type="range"],
+  :global(:root[data-theme="light"]) .qi-sliders input[type="range"] {
+    background: rgba(0, 0, 0, 0.1);
   }
 </style>
