@@ -1,5 +1,5 @@
-import type { Anchor, CalibrationConfig, CinematicConfig, EffectClip, EffectKind, SequenceProject } from "$lib/api";
-import { t, type Key } from "$lib/i18n/index.svelte";
+import type { Anchor, CalibrationConfig, CinematicConfig, EffectClip, EffectKind, Keyframe, KnotMode, SequenceProject } from "$lib/api";
+import { t, pointLabel, type Key } from "$lib/i18n/index.svelte";
 
 export type EffectCategory = "movement" | "micro" | "optics";
 
@@ -269,9 +269,45 @@ export function defaultCalibrationConfig(): CalibrationConfig {
   };
 }
 
+export function createDefaultHeroicKeyframes(anchor: Anchor | null = null): Keyframe[] {
+  const eye = anchor?.eye ?? [0, 1.65, 0];
+  const yaw = anchor?.yaw ?? 0;
+  const a = (yaw * Math.PI) / 180;
+  const sin = Math.sin(a);
+  const cos = Math.cos(a);
+
+  const offsets: { localPos: [number, number, number]; rot: [number, number, number]; time: number; zoom: number; knotMode: KnotMode; label: string }[] = [
+    { localPos: [-1.2, -0.35, 1.8], rot: [-11, 146, 0], time: 0, zoom: 38, knotMode: "stop", label: pointLabel(0) },
+    { localPos: [0, 0.05, 1.35], rot: [2, 180, 0], time: 5, zoom: 54, knotMode: "passThrough", label: pointLabel(1) },
+    { localPos: [1.2, 0.25, 1.9], rot: [7.5, -148, 0], time: 10, zoom: 45, knotMode: "stop", label: pointLabel(2) },
+  ];
+
+  return offsets.map((o, idx) => {
+    const lx = o.localPos[0];
+    const ly = o.localPos[1];
+    const lz = o.localPos[2];
+    const wx = eye[0] + lx * cos + lz * sin;
+    const wy = eye[1] + ly;
+    const wz = eye[2] - lx * sin + lz * cos;
+
+    return {
+      id: `kf-heroic-${idx}`,
+      label: o.label,
+      time: o.time,
+      rawPose: { pos: [Math.round(wx * 100) / 100, Math.round(wy * 100) / 100, Math.round(wz * 100) / 100], rot: o.rot },
+      localPose: { pos: o.localPos, rot: o.rot },
+      capturedAtMs: 0,
+      transition: "smooth",
+      knotMode: o.knotMode,
+      look: { zoom: o.zoom, exposure: null, focalDistance: null, aperture: null },
+    };
+  });
+}
+
 export function createDefaultSequenceProject(
   name = "Nueva Secuencia",
   anchor: Anchor | null = null,
+  includeDefaultKeyframes = true,
 ): SequenceProject {
   return {
     schemaVersion: 2,
@@ -286,8 +322,24 @@ export function createDefaultSequenceProject(
     target: null,
     cinematic: defaultCinematicConfig(),
     calibration: defaultCalibrationConfig(),
-    keyframes: [],
-    effects: [],
+    keyframes: includeDefaultKeyframes ? createDefaultHeroicKeyframes(anchor) : [],
+    effects: includeDefaultKeyframes
+      ? [
+          {
+            id: `ef-seed-${Date.now()}`,
+            kind: "cameraBreathing",
+            track: 0,
+            startTime: 0,
+            duration: 10,
+            intensity: 0.8,
+            speed: 1,
+            paramA: null,
+            paramB: null,
+            easing: "smooth",
+            enabled: true,
+          },
+        ]
+      : [],
     rawRecording: [],
   };
 }

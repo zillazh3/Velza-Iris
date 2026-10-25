@@ -51,6 +51,7 @@
     type EvaluatedFrame,
     type Keyframe,
     type Motion,
+    type Pose,
     type SequenceProject,
     type Status,
     type StudioPlaybackStatus,
@@ -276,6 +277,25 @@
   const defaultCinematic: CinematicConfig = defaultCinematicConfig();
   const defaultCalibration: CalibrationConfig = defaultCalibrationConfig();
 
+  function worldToAnchorLocal(
+    worldPos: [number, number, number],
+    anchor: { eye: [number, number, number]; yaw: number },
+  ): [number, number, number] {
+    const dx = worldPos[0] - anchor.eye[0];
+    const dy = worldPos[1] - anchor.eye[1];
+    const dz = worldPos[2] - anchor.eye[2];
+    const a = (anchor.yaw * Math.PI) / 180;
+    const sin = Math.sin(a);
+    const cos = Math.cos(a);
+    const localX = dx * cos - dz * sin;
+    const localZ = dx * sin + dz * cos;
+    return [
+      Math.round(localX * 1000) / 1000,
+      Math.round(dy * 1000) / 1000,
+      Math.round(localZ * 1000) / 1000,
+    ];
+  }
+
   function ensureProjectConfigs() {
     if (!Number.isFinite(activeProject.duration) || activeProject.duration <= 0) {
       activeProject.duration = DEFAULT_DURATION_SEC;
@@ -293,6 +313,17 @@
     }
     if (!activeProject.calibration) {
       activeProject.calibration = structuredClone(defaultCalibration);
+    }
+    if (!Array.isArray(activeProject.keyframes)) {
+      activeProject.keyframes = [];
+    }
+    for (const kf of activeProject.keyframes) {
+      if (!kf.look) {
+        kf.look = { zoom: 45, exposure: null, focalDistance: null, aperture: null };
+      }
+    }
+    if (!Array.isArray(activeProject.effects)) {
+      activeProject.effects = [];
     }
   }
 
@@ -397,10 +428,10 @@
       activeProject.effects.some((e) => e.track > 0) ||
       activeProject.keyframes.some(
         (k) =>
-          k.look.zoom !== null ||
-          k.look.exposure !== null ||
-          k.look.focalDistance !== null ||
-          k.look.aperture !== null,
+          k.look?.zoom != null ||
+          k.look?.exposure != null ||
+          k.look?.focalDistance != null ||
+          k.look?.aperture != null,
       ),
   );
 
@@ -625,15 +656,34 @@
     if (!selectedKeyframe) return;
     pushUndoSnapshot();
     const newTime = Math.min(activeProject.duration, Math.round((selectedKeyframe.time + 1.5) * 10) / 10);
-    let sampledPose = selectedKeyframe.rawPose;
+    let sampledPose: Pose = structuredClone(selectedKeyframe.rawPose);
     try {
       sampledPose = await api.sampleBasePoseAt(activeProject, newTime);
     } catch {
       // fallback a evaluatedFrame si está disponible
       if (evaluatedFrame?.basePose) {
-        sampledPose = evaluatedFrame.basePose;
+        sampledPose = structuredClone(evaluatedFrame.basePose);
       }
     }
+
+    // Si el tiempo duplicado está en o después del último keyframe o el pose es idéntico,
+    // desplazamos suavemente la pose a lo largo de la tangente hacia adelante de la cámara
+    // para evitar un plateau de posición congelada mientras el zoom cambia
+    const isAtEnd = newTime >= lastKeyframeTime;
+    const isIdentical =
+      Math.abs(sampledPose.pos[0] - selectedKeyframe.rawPose.pos[0]) < 1e-3 &&
+      Math.abs(sampledPose.pos[1] - selectedKeyframe.rawPose.pos[1]) < 1e-3 &&
+      Math.abs(sampledPose.pos[2] - selectedKeyframe.rawPose.pos[2]) < 1e-3;
+
+    if (isAtEnd || isIdentical) {
+      const yawRad = (selectedKeyframe.rawPose.rot[1] * Math.PI) / 180;
+      sampledPose.pos = [
+        Math.round((sampledPose.pos[0] + Math.sin(yawRad) * 0.5) * 100) / 100,
+        sampledPose.pos[1],
+        Math.round((sampledPose.pos[2] + Math.cos(yawRad) * 0.5) * 100) / 100,
+      ];
+    }
+
     const copy: Keyframe = {
       ...structuredClone(selectedKeyframe),
       id: `kf-dup-${Date.now()}`,
@@ -643,14 +693,13 @@
       localPose:
         activeProject.space === "anchor" && activeProject.anchorSnapshot
           ? {
-              pos: [
-                sampledPose.pos[0] - activeProject.anchorSnapshot.eye[0],
-                sampledPose.pos[1] - activeProject.anchorSnapshot.eye[1],
-                sampledPose.pos[2] - activeProject.anchorSnapshot.eye[2],
-              ],
-              rot: [...sampledPose.rot],
+              pos: worldToAnchorLocal(sampledPose.pos, activeProject.anchorSnapshot),
+              rot: [sampledPose.rot[0], sampledPose.rot[1], sampledPose.rot[2]],
             }
           : null,
+      look: selectedKeyframe.look
+        ? structuredClone(selectedKeyframe.look)
+        : { zoom: 45, exposure: null, focalDistance: null, aperture: null },
     };
     activeProject.keyframes = [...activeProject.keyframes, copy].sort((a, b) => a.time - b.time);
     selectedKeyframeId = copy.id;
@@ -816,10 +865,9 @@
     if (!kf) return;
     kf.rawPose.pos = [newPos[0], newPos[1], newPos[2]];
     if (activeProject.space === "anchor" && activeProject.anchorSnapshot) {
-      const [ax, ay, az] = activeProject.anchorSnapshot.eye;
       kf.localPose = {
-        pos: [newPos[0] - ax, newPos[1] - ay, newPos[2] - az],
-        rot: [...kf.rawPose.rot],
+        pos: worldToAnchorLocal(newPos, activeProject.anchorSnapshot),
+        rot: [kf.rawPose.rot[0], kf.rawPose.rot[1], kf.rawPose.rot[2]],
       };
     }
     void refreshMathPreview(false);
@@ -2797,9 +2845,12 @@
                       max="300"
                       step="1"
                       placeholder={t("studio.noChangePlaceholder")}
-                      value={selectedKeyframe.look.zoom ?? ""}
+                      value={selectedKeyframe.look?.zoom ?? ""}
                       oninput={(e) => {
                         const val = e.currentTarget.value.trim();
+                        if (!selectedKeyframe.look) {
+                          selectedKeyframe.look = { zoom: null, exposure: null, focalDistance: null, aperture: null };
+                        }
                         selectedKeyframe.look.zoom = val === "" ? null : Number(val);
                         refreshMathPreview(liveScrub);
                       }}
@@ -2813,9 +2864,12 @@
                       max="4"
                       step="0.2"
                       placeholder="Sin cambio"
-                      value={selectedKeyframe.look.exposure ?? ""}
+                      value={selectedKeyframe.look?.exposure ?? ""}
                       oninput={(e) => {
                         const val = e.currentTarget.value.trim();
+                        if (!selectedKeyframe.look) {
+                          selectedKeyframe.look = { zoom: null, exposure: null, focalDistance: null, aperture: null };
+                        }
                         selectedKeyframe.look.exposure = val === "" ? null : Number(val);
                         refreshMathPreview(liveScrub);
                       }}
@@ -2829,9 +2883,12 @@
                       max="10"
                       step="0.1"
                       placeholder="Sin cambio"
-                      value={selectedKeyframe.look.focalDistance ?? ""}
+                      value={selectedKeyframe.look?.focalDistance ?? ""}
                       oninput={(e) => {
                         const val = e.currentTarget.value.trim();
+                        if (!selectedKeyframe.look) {
+                          selectedKeyframe.look = { zoom: null, exposure: null, focalDistance: null, aperture: null };
+                        }
                         selectedKeyframe.look.focalDistance = val === "" ? null : Number(val);
                         refreshMathPreview(liveScrub);
                       }}
@@ -2845,9 +2902,12 @@
                       max="32"
                       step="0.2"
                       placeholder="Sin cambio"
-                      value={selectedKeyframe.look.aperture ?? ""}
+                      value={selectedKeyframe.look?.aperture ?? ""}
                       oninput={(e) => {
                         const val = e.currentTarget.value.trim();
+                        if (!selectedKeyframe.look) {
+                          selectedKeyframe.look = { zoom: null, exposure: null, focalDistance: null, aperture: null };
+                        }
                         selectedKeyframe.look.aperture = val === "" ? null : Number(val);
                         refreshMathPreview(liveScrub);
                       }}
@@ -3542,7 +3602,7 @@
           <!-- Pista 3: Óptica por Keyframe (Zoom / Enfoque / Apertura) -->
           <div class="tl-lane track-optics">
             <span class="lane-label">{t("studio.trackOptics")}</span>
-            {#each activeProject.keyframes.filter((k) => k.look.zoom !== null || k.look.aperture !== null || k.look.focalDistance !== null) as kf (kf.id)}
+            {#each activeProject.keyframes.filter((k) => k.look?.zoom != null || k.look?.aperture != null || k.look?.focalDistance != null) as kf (kf.id)}
               {@const leftPct = (kf.time / Math.max(0.1, activeProject.duration)) * 100}
               <button
                 type="button"
@@ -3554,8 +3614,8 @@
                   inspectorTab = "selection";
                 }}
               >
-                {kf.look.zoom ? `${kf.look.zoom}mm` : ""}
-                {kf.look.aperture ? `f/${kf.look.aperture}` : ""}
+                {kf.look?.zoom ? `${kf.look.zoom}mm` : ""}
+                {kf.look?.aperture ? `f/${kf.look.aperture}` : ""}
               </button>
             {/each}
           </div>

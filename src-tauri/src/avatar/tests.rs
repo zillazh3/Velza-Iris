@@ -286,3 +286,32 @@ fn test_12_rig_status_reports_pending_vrc_limitations() {
     let snap = s.snapshot(0.0, None);
     assert!(matches!(snap.rig_snapshot.status, RigRepresentationStatus::PendingVrcLimitations(_)));
 }
+
+#[test]
+fn test_13_service_actions_and_state_sync_do_not_deadlock() {
+    let cfg = AvatarIntegrationConfig::default();
+    let mut s = IrisIntegrationService::new(cfg);
+    let snap_a = mock_camera_snap([0.0, 1.6, 0.0], [0.0, 0.0, 0.0]);
+    let snap_b = mock_camera_snap([1.0, 1.6, 2.0], [0.0, 45.0, 0.0]);
+
+    // Sequential actions that previously could deadlock if locks were not dropped
+    assert!(s.handle_action_with_camera(AvatarAction::CaptureA, Some(&snap_a), None).unwrap().is_none());
+    assert_eq!(s.state, AvatarIntegrationState::Configuring);
+
+    assert!(s.handle_duration(0.75).is_ok());
+
+    assert!(s.handle_action_with_camera(AvatarAction::CaptureB, Some(&snap_b), None).unwrap().is_none());
+    assert_eq!(s.state, AvatarIntegrationState::Ready);
+
+    let mut adapter = super::state_adapter::AssetStateAdapter::new();
+    let packets = adapter.sync_state_packets(s.state, 0.5, true);
+    assert!(!packets.is_empty());
+
+    let req = s.handle_action_with_camera(AvatarAction::Preview, None, None).unwrap();
+    assert_eq!(req, Some(AvatarExecutionRequest::StartPlayback { live_osc: false }));
+    assert_eq!(s.state, AvatarIntegrationState::Previewing);
+
+    let stop_req = s.handle_action_with_camera(AvatarAction::Stop, None, None).unwrap();
+    assert_eq!(stop_req, Some(AvatarExecutionRequest::StopPlayback));
+    assert_eq!(s.state, AvatarIntegrationState::Stopped);
+}
