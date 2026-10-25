@@ -387,7 +387,8 @@ fn evaluate_uncalibrated_at(
         };
         let [target_pitch, target_yaw] = look_at_angles(final_pose.pos, target_pos);
         let target_rot = [target_pitch, target_yaw, final_pose.rot[2]];
-        final_pose.rot = slerp_euler(final_pose.rot, target_rot, tg.blend.clamp(0.0, 1.0));
+        let blend = if tg.blend.is_finite() { tg.blend.clamp(0.0, 1.0) } else { 1.0 };
+        final_pose.rot = slerp_euler(final_pose.rot, target_rot, blend);
     }
 
     (base_pose, final_pose, zoom, exposure, focal_distance, aperture)
@@ -395,8 +396,8 @@ fn evaluate_uncalibrated_at(
 
 /// Evalúa la secuencia completa en el instante `t` (en segundos).
 pub fn evaluate(project: &SequenceProject, active_anchor: Option<&Anchor>, t: f32) -> EvaluatedFrame {
-    let dur = project.duration.max(0.001);
-    let t = t.clamp(0.0, dur);
+    let dur = if project.duration.is_finite() { project.duration.max(0.001) } else { 5.0 };
+    let t = if t.is_finite() { t.clamp(0.0, dur) } else { 0.0 };
     let mut kfs = project.keyframes.clone();
     kfs.sort_by(|a, b| a.time.partial_cmp(&b.time).unwrap_or(std::cmp::Ordering::Equal));
 
@@ -461,20 +462,24 @@ pub fn evaluate(project: &SequenceProject, active_anchor: Option<&Anchor>, t: f3
         [0.0; 3],
     );
     // Garantizar que ningún valor no finito pueda propagarse hacia OSC
+    let mut safe_base_pose = base_pose;
+    if !safe_base_pose.pos.iter().chain(&safe_base_pose.rot).all(|x| x.is_finite()) {
+        safe_base_pose = Pose { pos: [0.0, 1.6, 2.0], rot: [0.0, 180.0, 0.0] };
+    }
     if !final_pose.pos.iter().chain(&final_pose.rot).all(|x| x.is_finite()) {
-        final_pose = base_pose;
+        final_pose = safe_base_pose;
     }
 
     EvaluatedFrame {
         time: t,
-        base_pose,
+        base_pose: safe_base_pose,
         final_pose,
-        zoom,
-        exposure,
-        focal_distance,
-        aperture,
-        linear_speed_mps,
-        angular_speed_dps,
+        zoom: zoom.filter(|v| v.is_finite()),
+        exposure: exposure.filter(|v| v.is_finite()),
+        focal_distance: focal_distance.filter(|v| v.is_finite()),
+        aperture: aperture.filter(|v| v.is_finite()),
+        linear_speed_mps: if linear_speed_mps.is_finite() { linear_speed_mps } else { 0.0 },
+        angular_speed_dps: if angular_speed_dps.is_finite() { angular_speed_dps } else { 0.0 },
     }
 }
 
@@ -741,5 +746,34 @@ mod tests {
 
         let prev = sample_trajectory(&p, Some(&operator_anchor), 16);
         assert_eq!(prev.target_pos, Some(operator_anchor.eye));
+    }
+
+    #[test]
+    fn handles_nan_and_infinite_eval_inputs_safely() {
+        use crate::studio::model::TargetConfig;
+
+        let mut p = SequenceProject::new("nan-eval", "Robustness Test", 5.0);
+        p.keyframes.push(make_kf("A", 0.0, [0.0, 1.6, 2.0], 0.0));
+        p.target = Some(TargetConfig {
+            enabled: true,
+            source: TargetSourceKind::StaticCalibratedPoint,
+            world_pos: [0.0, 1.6, 0.0],
+            blend: f32::NAN,
+            confidence: 1.0,
+            captured_at_ms: 0,
+        });
+
+        // Evaluar con time = NaN
+        let ev_nan = evaluate(&p, None, f32::NAN);
+        assert!(ev_nan.base_pose.to_args().is_ok());
+        assert!(ev_nan.final_pose.to_args().is_ok());
+        assert!(ev_nan.linear_speed_mps.is_finite());
+        assert!(ev_nan.angular_speed_dps.is_finite());
+
+        // Evaluar con duration = NaN
+        p.duration = f32::NAN;
+        let ev_dur_nan = evaluate(&p, None, 2.0);
+        assert!(ev_dur_nan.base_pose.to_args().is_ok());
+        assert!(ev_dur_nan.final_pose.to_args().is_ok());
     }
 }

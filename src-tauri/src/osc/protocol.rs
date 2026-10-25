@@ -97,9 +97,13 @@ impl Pose {
     pub const ADDR: &'static str = "/usercamera/Pose";
 
     /// Recibe 6 floats (VRChat entrega los ángulos en [0,360)). El pitch queda en [-90, 90].
+    /// Rechaza cualquier mensaje con floats no finitos (NaN, Inf, -Inf).
     pub fn from_args(args: &[OscType]) -> Option<Pose> {
         let v: Vec<f32> = args.iter().filter_map(|a| a.clone().float()).collect();
         let v: [f32; 6] = v.try_into().ok()?;
+        if !v.iter().all(|x| x.is_finite()) {
+            return None;
+        }
         Some(Pose { pos: [v[0], v[1], v[2]], rot: [wrap180(v[3]), wrap180(v[4]), wrap180(v[5])] })
     }
 
@@ -152,5 +156,12 @@ mod tests {
         assert!((q.rot[0] + 10.0).abs() < 1e-3 && (q.rot[1] + 90.0).abs() < 1e-3);
         assert!(Pose::from_args(&echo[..5]).is_none());
         assert!(Pose { pos: [f32::NAN, 0.0, 0.0], rot: [0.0; 3] }.to_args().is_err());
+
+        // Rechaza valores no finitos entrantes
+        let nan_args: Vec<_> = [f32::NAN, 1.5, 2.0, 0.0, 0.0, 0.0].iter().map(|v| OscType::Float(*v)).collect();
+        assert!(Pose::from_args(&nan_args).is_none());
+
+        let inf_args: Vec<_> = [1.0, 1.5, 2.0, 0.0, f32::INFINITY, 0.0].iter().map(|v| OscType::Float(*v)).collect();
+        assert!(Pose::from_args(&inf_args).is_none());
     }
 }
