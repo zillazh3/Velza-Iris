@@ -514,19 +514,18 @@ impl CalibrationRuntime {
                     step_pos[i] = err_vec[i] * 0.12 * flip_damp;
                 }
                 step_pos = clamp_vec3_len(step_pos, MAX_POS_SLEW_MPS * safe_dt);
-                for i in 0..3 {
-                    self.active_pos_correction[i] = (self.active_pos_correction[i] + step_pos[i])
-                        .clamp(-MAX_POS_CORRECTION_M, MAX_POS_CORRECTION_M);
+                for (corr, &step) in self.active_pos_correction.iter_mut().zip(&step_pos) {
+                    *corr = (*corr + step).clamp(-MAX_POS_CORRECTION_M, MAX_POS_CORRECTION_M);
                 }
                 applied_any = true;
             }
 
             if rot_err > ROT_DEADBAND_DEG {
-                for i in 0..3 {
+                for (i, slot) in step_rot.iter_mut().enumerate() {
                     let diff = angle_diff_deg(observed_pose.rot[i], expected_pose.rot[i]);
                     let max_step = MAX_ROT_SLEW_DPS * safe_dt;
                     let delta = (diff * 0.10).clamp(-max_step, max_step);
-                    step_rot[i] = delta;
+                    *slot = delta;
                     self.active_rot_correction[i] = (self.active_rot_correction[i] + delta)
                         .clamp(-MAX_ROT_CORRECTION_DEG, MAX_ROT_CORRECTION_DEG);
                 }

@@ -375,33 +375,31 @@ impl AnchorManager {
     pub fn check_timeouts(&mut self, now_ms: u64) {
         if self.state == AnchorLifecycleState::SyncLost
             && self.sync_loss_cause == Some(SyncLossCause::TransientModeZero)
+            && let Some(zero_since) = self.mode_zero_since_ms
+            && now_ms.saturating_sub(zero_since) > MODE_SWITCH_GRACE_MS
         {
-            if let Some(zero_since) = self.mode_zero_since_ms {
-                if now_ms.saturating_sub(zero_since) > MODE_SWITCH_GRACE_MS {
-                    let release_ms = zero_since + MODE_SWITCH_GRACE_MS;
-                    self.anchor = None;
-                    self.provenance = None;
-                    self.locked_to_operator = false;
-                    self.mode_zero_since_ms = None;
-                    self.sync_loss_cause = None;
-                    self.transition_to(
-                        AnchorLifecycleState::Released,
-                        release_ms,
-                        "Cierre de cámara confirmado tras expirar ventana de cambio de modo",
-                    );
-                }
-            }
-        } else if self.state == AnchorLifecycleState::Active && self.external_control_active {
-            if let Some(last_ver) = self.last_verified_ms {
-                if now_ms.saturating_sub(last_ver) > ACTIVE_SYNC_TIMEOUT_MS {
-                    self.sync_loss_cause = Some(SyncLossCause::PacketTimeout);
-                    self.transition_to(
-                        AnchorLifecycleState::SyncLost,
-                        now_ms,
-                        "Tiempo de espera de sincronización OSC excedido; ancla conservada en memoria",
-                    );
-                }
-            }
+            let release_ms = zero_since + MODE_SWITCH_GRACE_MS;
+            self.anchor = None;
+            self.provenance = None;
+            self.locked_to_operator = false;
+            self.mode_zero_since_ms = None;
+            self.sync_loss_cause = None;
+            self.transition_to(
+                AnchorLifecycleState::Released,
+                release_ms,
+                "Cierre de cámara confirmado tras expirar ventana de cambio de modo",
+            );
+        } else if self.state == AnchorLifecycleState::Active
+            && self.external_control_active
+            && let Some(last_ver) = self.last_verified_ms
+            && now_ms.saturating_sub(last_ver) > ACTIVE_SYNC_TIMEOUT_MS
+        {
+            self.sync_loss_cause = Some(SyncLossCause::PacketTimeout);
+            self.transition_to(
+                AnchorLifecycleState::SyncLost,
+                now_ms,
+                "Tiempo de espera de sincronización OSC excedido; ancla conservada en memoria",
+            );
         }
     }
 
@@ -557,10 +555,10 @@ impl AnchorManager {
         }
         self.last_event_ms = timestamp_ms;
         self.look_at_me_active = Some(enabled);
-        if let Some([x, y]) = offsets_xy {
-            if x.is_finite() && y.is_finite() {
-                self.look_at_me_offsets = [x, y];
-            }
+        if let Some([x, y]) = offsets_xy
+            && x.is_finite() && y.is_finite()
+        {
+            self.look_at_me_offsets = [x, y];
         }
     }
 
@@ -583,18 +581,17 @@ impl AnchorManager {
         }
 
         // Deduplicar ecos dobles idénticos en ráfaga (~5 ms)
-        if let Some((prev_ms, prev_pose)) = self.last_observed_pose {
-            if timestamp_ms.saturating_sub(prev_ms) <= DUPLICATE_POSE_WINDOW_MS
-                && pose_distance(&pose, &prev_pose) < 1e-4
-                && pose_rot_max_diff(&pose, &prev_pose) < 1e-3
-            {
-                self.last_event_ms = timestamp_ms;
-                self.last_pose_seq = seq.max(self.last_pose_seq);
-                if self.state == AnchorLifecycleState::Active {
-                    self.last_verified_ms = Some(timestamp_ms);
-                }
-                return;
+        if let Some((prev_ms, prev_pose)) = self.last_observed_pose
+            && timestamp_ms.saturating_sub(prev_ms) <= DUPLICATE_POSE_WINDOW_MS
+            && pose_distance(&pose, &prev_pose) < 1e-4
+            && pose_rot_max_diff(&pose, &prev_pose) < 1e-3
+        {
+            self.last_event_ms = timestamp_ms;
+            self.last_pose_seq = seq.max(self.last_pose_seq);
+            if self.state == AnchorLifecycleState::Active {
+                self.last_verified_ms = Some(timestamp_ms);
             }
+            return;
         }
 
         self.check_timeouts(timestamp_ms);

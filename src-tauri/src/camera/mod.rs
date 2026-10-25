@@ -288,10 +288,8 @@ impl State {
         if matches!(kind(name), Some(Kind::Trigger)) {
             return Ok(true);
         }
-        if let Some(prev) = self.last_sent.get(name).copied() {
-            if values_close_enough(prev, value) {
-                return Ok(false);
-            }
+        if self.last_sent.get(name).copied().is_some_and(|prev| values_close_enough(prev, value)) {
+            return Ok(false);
         }
         self.last_sent.insert(name.to_string(), value);
         Ok(true)
@@ -370,6 +368,41 @@ impl Camera {
             }
         }
         Ok(Camera { osc, state })
+    }
+
+    /// Inicia el cliente y escucha OSC enrutando mensajes `/avatar/*` al módulo de avatar
+    /// y mensajes `/usercamera/*` al pipeline de cámara y anclaje.
+    pub fn start_with_avatar_router(
+        target: SocketAddr,
+        on_event: impl Fn(Option<Change>, Option<CameraOscEvent>) + Send + 'static,
+        mut on_avatar_msg: impl FnMut(OscMessage) + Send + 'static,
+    ) -> Result<Camera, String> {
+        let state = Arc::new(Mutex::new(State::default()));
+        let s = state.clone();
+        let osc = Osc::start(target, move |m| {
+            if m.addr.starts_with("/avatar/") {
+                on_avatar_msg(m);
+                return;
+            }
+            let now_ms = now_epoch_ms();
+            let (change, ev) = s.lock().unwrap().apply_with_event(&m, now_ms);
+            if change.is_some() || ev.is_some() {
+                on_event(change, ev);
+            }
+        })?;
+        {
+            let mut st = state.lock().unwrap();
+            st.rx_available = osc.rx_bound;
+            if !osc.rx_bound {
+                // En modo Control Abierto (sin escucha en 9001), asumimos cámara abierta para no bloquear envíos.
+                st.open = true;
+            }
+        }
+        Ok(Camera { osc, state })
+    }
+
+    pub fn send_raw(&self, addr: String, args: Vec<rosc::OscType>) -> Result<(), String> {
+        self.osc.send_raw(addr, args)
     }
 
     pub fn set(&self, name: &str, value: Value) -> Result<(), String> {

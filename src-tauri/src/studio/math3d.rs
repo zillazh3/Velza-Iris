@@ -213,11 +213,11 @@ impl ArcLengthSegment {
         let mut cum_len = [0.0_f32; ARC_SAMPLES + 1];
         let mut prev = p1;
         let mut acc = 0.0_f32;
-        for i in 1..=ARC_SAMPLES {
+        for (i, len) in cum_len.iter_mut().enumerate().skip(1) {
             let u = i as f32 / ARC_SAMPLES as f32;
             let pt = catmull_rom_centripetal(p0, p1, p2, p3, u);
             acc += dist3(prev, pt);
-            cum_len[i] = acc;
+            *len = acc;
             prev = pt;
         }
         ArcLengthSegment {

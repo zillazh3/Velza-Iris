@@ -137,10 +137,10 @@ fn run(mut player: Player, rx: Receiver<Cmd>, shared: Arc<Mutex<Shared>>, mut si
         let dt = now.duration_since(last).as_secs_f32();
         last = now;
         let mut error = None;
-        if let Some(out) = player.tick(dt) {
-            if let Err(e) = sink(&out) {
-                error = Some(e);
-            }
+        if let Some(out) = player.tick(dt)
+            && let Err(e) = sink(&out)
+        {
+            error = Some(e);
         }
         let state = if error.is_some() { PlayState::Stopped } else { player.state() };
         *shared.lock().unwrap() = Shared { state, error };

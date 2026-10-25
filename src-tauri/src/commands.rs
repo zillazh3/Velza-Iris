@@ -1,11 +1,17 @@
 //! Comandos Tauri: puente entre la UI y camera/anchor/presets/studio.
 use crate::anchor::{Anchor, AnchorManager, AnchorSnapshot};
+use crate::avatar::config::AvatarIntegrationConfig;
+use crate::avatar::protocol::AvatarAction;
+use crate::avatar::router::CommandRouter;
+use crate::avatar::service::{AvatarExecutionRequest, AvatarIntegrationSnapshot, IrisIntegrationService};
+use crate::avatar::state_adapter::AssetStateAdapter;
 use crate::camera::{now_epoch_ms, Camera, CameraOscEvent, CameraSnapshot, Change, DEFAULTS};
 use crate::motion::runner::{Cmd, Output, PlayState, Runner};
 use crate::motion::sample::{motions, Motion};
 use crate::motion::turnaround::{self, Action, Progress, Timing, Turnaround};
-use crate::osc::protocol::Value;
+use crate::osc::protocol::{Pose, Value};
 use crate::osc::query;
+use rosc::OscMessage;
 use crate::presets::{self, Preset};
 use crate::storage;
 use crate::studio::calibration::{CalibrationRuntime, TelemetryReport};
@@ -48,6 +54,9 @@ pub struct App {
     /// Estado dinámico de telemetría y calibración adaptativa (separado de los datos persistentes del proyecto).
     calibration_rt: Mutex<CalibrationRuntime>,
     data: Result<PathBuf, String>,
+    /// Servicio de integración y FSM con el asset de avatar de VRChat.
+    pub avatar_service: Arc<Mutex<IrisIntegrationService>>,
+    avatar_state_adapter: Mutex<AssetStateAdapter>,
 }
 
 impl App {
@@ -63,6 +72,8 @@ impl App {
             turnaround: Mutex::default(),
             calibration_rt: Mutex::default(),
             data: storage::data_dir(false),
+            avatar_service: Arc::new(Mutex::new(IrisIntegrationService::new(AvatarIntegrationConfig::default()))),
+            avatar_state_adapter: Mutex::new(AssetStateAdapter::new()),
         }
     }
 
@@ -89,11 +100,11 @@ impl App {
         if let Some(rec) = self.recording.lock().unwrap().take() {
             rec.stop.store(true, Ordering::Relaxed);
         }
-        if let Some(prev) = self.motion_prev_opts.lock().unwrap().take() {
-            if let Some(cam) = self.camera.lock().unwrap().as_ref() {
-                for (n, v) in prev {
-                    let _ = cam.set(n, v);
-                }
+        if let Some(prev) = self.motion_prev_opts.lock().unwrap().take()
+            && let Some(cam) = self.camera.lock().unwrap().as_ref()
+        {
+            for (n, v) in prev {
+                let _ = cam.set(n, v);
             }
         }
     }
@@ -124,6 +135,105 @@ impl App {
         }
         preset.apply(cam, anchor.as_ref())
     }
+
+    /// Procesa un mensaje OSC proveniente del avatar de VRChat (`/avatar/*`).
+    pub fn process_avatar_osc_message(&self, m: &OscMessage, app: AppHandle) {
+        let mut service = self.avatar_service.lock().unwrap();
+        let cmd = match service.validator.validate_message(m) {
+            Ok(Some(c)) => c,
+            Ok(None) => return,
+            Err(e) => {
+                if service.config.log_diagnostics {
+                    eprintln!("[Avatar OSC] Error al validar {}: {}", m.addr, e);
+                }
+                return;
+            }
+        };
+
+        let cam_snap = self.camera.lock().unwrap().as_ref().map(|c| c.state.lock().unwrap().snapshot());
+        let anchor = self.current_anchor();
+
+        match &cmd {
+            crate::avatar::validator::ValidatedAvatarCommand::Action(act) => {
+                let action = *act;
+                match service.handle_action_with_camera(action, cam_snap.as_ref(), anchor.as_ref()) {
+                    Ok(Some(req)) => {
+                        let proj = service.project.clone();
+                        let looping = service.looping;
+                        drop(service);
+                        match req {
+                            AvatarExecutionRequest::StartPlayback { live_osc } => {
+                                let st = app.state::<App>();
+                                let _ = play_sequence_internal(&app, &st, proj, 0.0, looping, live_osc);
+                            }
+                            AvatarExecutionRequest::StopPlayback => {
+                                self.halt();
+                            }
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(e) => {
+                        eprintln!("[Avatar OSC] Acción {:?} rechazada: {}", action, e);
+                    }
+                }
+            }
+            _ => {
+                if let Err(e) = CommandRouter::route(&mut service, cmd) {
+                    eprintln!("[Avatar OSC] Error en enrutador de avatar: {}", e);
+                }
+            }
+        }
+
+        self.sync_avatar_osc_state();
+    }
+
+    /// Sincroniza el estado y progreso actual hacia los parámetros de expresión del avatar.
+    pub fn sync_avatar_osc_state(&self) {
+        let cam_guard = self.camera.lock().unwrap();
+        let Some(cam) = cam_guard.as_ref() else { return };
+        let service = self.avatar_service.lock().unwrap();
+        let current_time = self
+            .studio_runner
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|r| r.status().current_time)
+            .unwrap_or(0.0);
+        let duration = service.project.duration.max(0.1);
+        let progress = (current_time / duration).clamp(0.0, 1.0);
+
+        let mut adapter = self.avatar_state_adapter.lock().unwrap();
+        let packets = adapter.sync_state_packets(service.state, progress, true);
+        for p in packets {
+            if let rosc::OscPacket::Message(msg) = p {
+                let _ = cam.send_raw(msg.addr, msg.args);
+            }
+        }
+    }
+
+    /// Disparo de acción de avatar manual (vía UI o pruebas).
+    pub fn trigger_avatar_action_internal(&self, action: AvatarAction, app: AppHandle) -> Result<(), String> {
+        let cam_snap = self.camera.lock().unwrap().as_ref().map(|c| c.state.lock().unwrap().snapshot());
+        let anchor = self.current_anchor();
+        let mut service = self.avatar_service.lock().unwrap();
+        let req = service.handle_action_with_camera(action, cam_snap.as_ref(), anchor.as_ref())?;
+        if let Some(r) = req {
+            let proj = service.project.clone();
+            let looping = service.looping;
+            drop(service);
+            match r {
+                AvatarExecutionRequest::StartPlayback { live_osc } => {
+                    let st = app.state::<App>();
+                    play_sequence_internal(&app, &st, proj, 0.0, looping, live_osc)?;
+                }
+                AvatarExecutionRequest::StopPlayback => {
+                    self.halt();
+                }
+            }
+        }
+        self.sync_avatar_osc_state();
+        Ok(())
+    }
 }
 
 #[derive(Serialize)]
@@ -149,11 +259,10 @@ fn reapply(app: AppHandle) {
         // ponytail: pausa fija para que VRChat termine de abrir; sin medir en vivo.
         std::thread::sleep(Duration::from_millis(300));
         let st = app.state::<App>();
-        let last = st.last.lock().unwrap().clone();
-        if let Some(p) = last {
-            if let Err(e) = st.apply(&p) {
-                eprintln!("no pude reaplicar '{}': {e}", p.name);
-            }
+        if let Some(p) = st.last.lock().unwrap().clone()
+            && let Err(e) = st.apply(&p)
+        {
+            eprintln!("no pude reaplicar '{}': {e}", p.name);
         }
     });
 }
@@ -167,28 +276,36 @@ pub async fn connect(app: AppHandle, st: State<'_, App>) -> Result<(), String> {
         .await
         .map_err(|e| e.to_string())??;
     let mgr_arc = st.anchor_mgr.clone();
-    let cam = Camera::start_with_events(target, move |change, osc_ev| {
-        let mut is_fresh_open = matches!(change, Some(Change::Opened));
-        if let Some(ev) = osc_ev {
-            let mut mgr = mgr_arc.lock().unwrap();
-            let prev_switches = mgr.snapshot().mode_switch_count;
-            match ev {
-                CameraOscEvent::Mode { new_mode, timestamp_ms, .. } => mgr.on_mode(i32::from(new_mode), timestamp_ms),
-                CameraOscEvent::Pose { pose, seq, timestamp_ms } => mgr.on_pose(pose, seq, timestamp_ms),
-                CameraOscEvent::LookAtMe { enabled, offsets_xy, timestamp_ms } => {
-                    mgr.on_look_at_me(enabled, offsets_xy, timestamp_ms)
+    let app_handle = app.clone();
+    let cam = Camera::start_with_avatar_router(
+        target,
+        move |change, osc_ev| {
+            let mut is_fresh_open = matches!(change, Some(Change::Opened));
+            if let Some(ev) = osc_ev {
+                let mut mgr = mgr_arc.lock().unwrap();
+                let prev_switches = mgr.snapshot().mode_switch_count;
+                match ev {
+                    CameraOscEvent::Mode { new_mode, timestamp_ms, .. } => mgr.on_mode(i32::from(new_mode), timestamp_ms),
+                    CameraOscEvent::Pose { pose, seq, timestamp_ms } => mgr.on_pose(pose, seq, timestamp_ms),
+                    CameraOscEvent::LookAtMe { enabled, offsets_xy, timestamp_ms } => {
+                        mgr.on_look_at_me(enabled, offsets_xy, timestamp_ms)
+                    }
+                }
+                // Si fue una transición de cambio de modo (p. ej. Photo 1 -> 0 -> Stream 2),
+                // conservamos el ancla y el estado sin reinicializar el preset.
+                if mgr.snapshot().mode_switch_count > prev_switches {
+                    is_fresh_open = false;
                 }
             }
-            // Si fue una transición de cambio de modo (p. ej. Photo 1 -> 0 -> Stream 2),
-            // conservamos el ancla y el estado sin reinicializar el preset.
-            if mgr.snapshot().mode_switch_count > prev_switches {
-                is_fresh_open = false;
+            if is_fresh_open {
+                reapply(app.clone());
             }
-        }
-        if is_fresh_open {
-            reapply(app.clone());
-        }
-    })?;
+        },
+        move |osc_msg| {
+            let st = app_handle.state::<App>();
+            st.process_avatar_osc_message(&osc_msg, app_handle.clone());
+        },
+    )?;
     *st.camera.lock().unwrap() = Some(cam);
     Ok(())
 }
@@ -561,7 +678,7 @@ pub fn evaluate_sequence(
     let anchor = st.current_anchor();
     // Si hay una secuencia reproduciéndose en vivo o en vista previa, sincronizar cualquier cambio de FX/puntos al instante
     if let Some(runner) = st.studio_runner.lock().unwrap().as_ref() {
-        runner.send(StudioCmd::UpdateProject(project.clone(), anchor));
+        runner.send(StudioCmd::UpdateProject(Box::new(project.clone()), anchor));
     }
     let frame = evaluate(&project, anchor.as_ref(), time);
     if send_to_camera {
@@ -570,9 +687,10 @@ pub fn evaluate_sequence(
             .unwrap()
             .record_commanded_pose(frame.final_pose, now_epoch_ms());
         let cam_guard = st.camera.lock().unwrap();
-        if let Some(cam) = cam_guard.as_ref() {
-            if cam.state.lock().unwrap().open {
-                let _ = cam.set("LookAtMe", Value::B(false));
+        if let Some(cam) = cam_guard.as_ref()
+            && cam.state.lock().unwrap().open
+        {
+            let _ = cam.set("LookAtMe", Value::B(false));
                 let _ = cam.pose(&frame.final_pose);
                 if let Some(z) = frame.zoom.filter(|z| z.is_finite()) {
                     let _ = cam.set("Zoom", Value::F(z));
@@ -586,7 +704,6 @@ pub fn evaluate_sequence(
                 if let Some(ap) = frame.aperture.filter(|ap| ap.is_finite()) {
                     let _ = cam.set("Aperture", Value::F(ap));
                 }
-            }
         }
     }
     Ok(frame)
@@ -610,14 +727,13 @@ pub enum StudioControlCmd {
 }
 
 /// Inicia la reproducción de una secuencia de Iris Studio (en modo Vista Previa local o en Vivo hacia VRChat OSC).
-#[tauri::command]
-pub fn play_sequence(
+pub fn play_sequence_internal(
+    app: &AppHandle,
+    st: &App,
     project: SequenceProject,
     start_time: f32,
     looping: bool,
     live_osc: bool,
-    app: AppHandle,
-    st: State<App>,
 ) -> Result<(), String> {
     if project.keyframes.is_empty() {
         return Err("Agrega al menos un punto en la línea de tiempo antes de reproducir.".into());
@@ -642,12 +758,13 @@ pub fn play_sequence(
         st.anchor_mgr.lock().unwrap().set_external_control_active(true);
     }
 
-    let cal_cfg = project.calibration.clone();
+    let cal_cfg = project.calibration;
+    let app_clone = app.clone();
     let runner = StudioRunner::start(project, anchor, start_time, looping, live_osc, move |ev, send_osc| {
         if !send_osc {
             return Ok(());
         }
-        let st = app.state::<App>();
+        let st = app_clone.state::<App>();
         let now_ms = now_epoch_ms();
         let mut pose_to_send = ev.final_pose;
         {
@@ -683,6 +800,19 @@ pub fn play_sequence(
 
     *st.studio_runner.lock().unwrap() = Some(runner);
     Ok(())
+}
+
+/// Inicia la reproducción de una secuencia de Iris Studio (en modo Vista Previa local o en Vivo hacia VRChat OSC).
+#[tauri::command]
+pub fn play_sequence(
+    project: SequenceProject,
+    start_time: f32,
+    looping: bool,
+    live_osc: bool,
+    app: AppHandle,
+    st: State<App>,
+) -> Result<(), String> {
+    play_sequence_internal(&app, &st, project, start_time, looping, live_osc)
 }
 
 #[tauri::command]
@@ -764,18 +894,18 @@ pub fn start_recording(app: AppHandle, st: State<App>) -> Result<(), String> {
                 let cam_guard = st.camera.lock().unwrap();
                 if let Some(cam) = cam_guard.as_ref() {
                     let snap = cam.state.lock().unwrap().snapshot();
-                    if snap.open && snap.pose_fresh {
-                        if let Some(pose) = snap.pose {
-                            let mut buf = samples_clone.lock().unwrap();
-                            // Registrar en el primer instante o cada vez que VRChat emita un nuevo paquete Pose
-                            if buf.is_empty() || snap.pose_seq != last_seq {
-                                last_seq = snap.pose_seq;
-                                buf.push(RecordedSample {
-                                    time: started_at.elapsed().as_secs_f32(),
-                                    pose,
-                                    zoom: snap.zoom,
-                                });
-                            }
+                    if snap.open && snap.pose_fresh
+                        && let Some(pose) = snap.pose
+                    {
+                        let mut buf = samples_clone.lock().unwrap();
+                        // Registrar en el primer instante o cada vez que VRChat emita un nuevo paquete Pose
+                        if buf.is_empty() || snap.pose_seq != last_seq {
+                            last_seq = snap.pose_seq;
+                            buf.push(RecordedSample {
+                                time: started_at.elapsed().as_secs_f32(),
+                                pose,
+                                zoom: snap.zoom,
+                            });
                         }
                     }
                 }
@@ -868,10 +998,10 @@ pub fn list_sequences(st: State<App>) -> SequenceLibrary {
 
 #[tauri::command]
 pub fn save_sequence_cmd(mut project: SequenceProject, st: State<App>) -> Result<SequenceProject, String> {
-    if let Some(anchor) = st.current_anchor() {
-        if project.anchor_snapshot.is_none() {
-            project.bind_anchor(anchor);
-        }
+    if let Some(anchor) = st.current_anchor()
+        && project.anchor_snapshot.is_none()
+    {
+        project.bind_anchor(anchor);
     }
     project.sort_keyframes();
     let dir = st.data.as_ref().map_err(|e| e.clone())?.join("sequences");
@@ -956,4 +1086,59 @@ pub fn export_vrc_dolly_cmd(project: SequenceProject, bake_effects: bool, st: St
     let anchor = st.current_anchor();
     export_vrc_dolly_json(&project, anchor.as_ref(), bake_effects)
 }
+
+// ---------- Integración con Avatar de VRChat (VRCFury) y Corrección de Trayectoria ----------
+
+/// Ajusta y escala proporcionalmente los keyframes para abarcar la duración objetivo (`target_duration`),
+/// evitando que el recorrido espacial se detenga prematuramente mientras los efectos de zoom continúan.
+#[tauri::command]
+pub fn fit_keyframes_to_duration(mut project: SequenceProject, target_duration: f32) -> SequenceProject {
+    crate::studio::evaluator::fit_keyframes_to_duration(&mut project.keyframes, target_duration);
+    project.duration = target_duration;
+    project
+}
+
+/// Muestrea la pose base interpolada a lo largo de la trayectoria en el instante `time`.
+#[tauri::command]
+pub fn sample_base_pose_at(project: SequenceProject, time: f32, st: State<App>) -> Pose {
+    let anchor = st.current_anchor();
+    crate::studio::evaluator::sample_base_pose_at(&project, anchor.as_ref(), time)
+}
+
+/// Obtiene el estado actual y diagnóstico de la integración con el avatar de VRChat.
+#[tauri::command]
+pub fn avatar_status(st: State<App>) -> AvatarIntegrationSnapshot {
+    let service = st.avatar_service.lock().unwrap();
+    let anchor = st.current_anchor();
+    let current_time = st
+        .studio_runner
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|r| r.status().current_time)
+        .unwrap_or(0.0);
+    service.snapshot(current_time, anchor.as_ref())
+}
+
+/// Obtiene la configuración de la integración con el avatar.
+#[tauri::command]
+pub fn avatar_config(st: State<App>) -> AvatarIntegrationConfig {
+    st.avatar_service.lock().unwrap().config.clone()
+}
+
+/// Guarda y actualiza la configuración de la integración con el avatar.
+#[tauri::command]
+pub fn save_avatar_config(config: AvatarIntegrationConfig, st: State<App>) -> Result<AvatarIntegrationConfig, String> {
+    st.avatar_service.lock().unwrap().update_config(config.clone());
+    Ok(config)
+}
+
+/// Dispara manualmente una acción del avatar para diagnóstico desde la UI.
+#[tauri::command]
+pub fn trigger_avatar_action(action: i32, app: AppHandle, st: State<App>) -> Result<AvatarIntegrationSnapshot, String> {
+    let act = AvatarAction::from_i32(action).ok_or("Acción de avatar inválida")?;
+    st.trigger_avatar_action_internal(act, app.clone())?;
+    Ok(avatar_status(st))
+}
+
 

@@ -38,8 +38,9 @@
     FolderOpen,
     FileCode,
   } from "@lucide/svelte";
-  import { api, type Preset, type SequenceProject, type Status } from "$lib/api";
+  import { api, type Preset, type SequenceProject, type Status, type AvatarIntegrationSnapshot } from "$lib/api";
   import { i18n, t, pointLabel, localizeError, localizePresetName, type Key } from "$lib/i18n/index.svelte";
+  import { createDefaultSequenceProject } from "$lib/studio/catalog";
   import MotionPanel from "$lib/MotionPanel.svelte";
   import StudioWorkspace from "$lib/studio/StudioWorkspace.svelte";
   import IrisSelect, { type SelectOption } from "$lib/components/ui/IrisSelect.svelte";
@@ -59,90 +60,35 @@
   });
   let presets = $state<Preset[]>([]);
   let sequences = $state<SequenceProject[]>([]);
-  let activeProject = $state<SequenceProject>({
-    schemaVersion: 2,
-    id: "seed-arco-heroico",
-    name: "Arco Heroico Cinematográfico",
-    duration: 10,
-    durationUnit: "seconds",
-    durationInputMode: "valueUnit",
-    space: "anchor",
-    anchorSnapshot: { eye: [0, 1.65, 0], yaw: 0 },
-    trajectoryScale: 1,
-    target: null,
-    cinematic: {
-      profile: "cinematic",
-      inertiaTau: 0.18,
-      maxLinearSpeed: 4.5,
-      maxLinearAccel: 8.0,
-      maxAngularSpeed: 180.0,
-      organicVariation: 0.0,
-      organicSeed: 42,
-    },
-    calibration: {
-      enabled: true,
-      autoCorrect: false,
-      posOffset: [0, 0, 0],
-      yawOffsetDeg: 0,
-      pitchOffsetDeg: 0,
-      compositionX: 0,
-      compositionY: 0,
-      leadRoom: 0,
-    },
-    keyframes: [
-      {
-        id: "kf-a",
-        label: pointLabel(0),
-        time: 0,
-        rawPose: { pos: [-1.2, 1.3, 1.8], rot: [-11, 146, 0] },
-        localPose: { pos: [-1.2, -0.35, 1.8], rot: [-11, 146, 0] },
-        capturedAtMs: 0,
-        transition: "smooth",
-        knotMode: "stop",
-        look: { zoom: 38, exposure: null, focalDistance: null, aperture: null },
-      },
-      {
-        id: "kf-b",
-        label: pointLabel(1),
-        time: 5,
-        rawPose: { pos: [0, 1.7, 1.35], rot: [2, 180, 0] },
-        localPose: { pos: [0, 0.05, 1.35], rot: [2, 180, 0] },
-        capturedAtMs: 0,
-        transition: "smooth",
-        knotMode: "passThrough",
-        look: { zoom: 54, exposure: null, focalDistance: null, aperture: null },
-      },
-      {
-        id: "kf-c",
-        label: pointLabel(2),
-        time: 10,
-        rawPose: { pos: [1.2, 1.9, 1.9], rot: [7.5, -148, 0] },
-        localPose: { pos: [1.2, 0.25, 1.9], rot: [7.5, -148, 0] },
-        capturedAtMs: 0,
-        transition: "smooth",
-        knotMode: "stop",
-        look: { zoom: 45, exposure: null, focalDistance: null, aperture: null },
-      },
-    ],
-    effects: [
-      {
-        id: "ef-1",
-        kind: "cameraBreathing",
-        track: 0,
-        startTime: 0,
-        duration: 10,
-        intensity: 0.8,
-        speed: 1,
-        paramA: null,
-        paramB: null,
-        easing: "smooth",
-        enabled: true,
-      },
-    ],
-    rawRecording: [],
-  });
+  let activeProject = $state<SequenceProject>(createDefaultSequenceProject("Arco Heroico Cinematográfico"));
 
   let message = $state<{ text: string; ok: boolean } | null>(null);
+  let avatarSnapshot = $state<AvatarIntegrationSnapshot | null>(null);
+
+  async function pollAvatarStatus() {
+    try {
+      avatarSnapshot = await api.avatarStatus();
+    } catch {
+      /* inicializando */
+    }
+  }
+
+  $effect(() => {
+    if (activeView === "settings") {
+      void pollAvatarStatus();
+      const interval = setInterval(pollAvatarStatus, 1000);
+      return () => clearInterval(interval);
+    }
+  });
+
+  async function handleSimulateAvatarAction(action: number) {
+    try {
+      avatarSnapshot = await api.triggerAvatarAction(action);
+      message = { text: t("settings.avatarActionTriggered"), ok: true };
+    } catch (e: any) {
+      message = { text: String(e), ok: false };
+    }
+  }
   let selectedCategory = $state<"all" | Category>("all");
   let motionCount = $state(0);
   let collapsed = $state(false);
@@ -254,18 +200,19 @@
     URL.revokeObjectURL(url);
   }
 
+  const slugFilename = (name: string, ext: string) =>
+    `${name.toLowerCase().replace(/[^a-z0-9_-]/g, "_") || "sequence"}.${ext}`;
+
   function downloadSequenceFile(seq: SequenceProject) {
-    const raw = JSON.stringify(seq, null, 2);
-    const safeName = seq.name.toLowerCase().replace(/[^a-z0-9_-]/g, "_") || "sequence";
-    downloadJsonFile(`${safeName}.iris.json`, raw);
-    message = { text: t("toast.jsonCopied", { name: `${safeName}.iris.json` }), ok: true };
+    const filename = slugFilename(seq.name, "iris.json");
+    downloadJsonFile(filename, JSON.stringify(seq, null, 2));
+    message = { text: t("toast.jsonCopied", { name: filename }), ok: true };
   }
 
   async function downloadDollyFile(seq: SequenceProject, bakeEffects: boolean) {
     await run(async () => {
       const raw = await api.exportVrcDolly(seq, bakeEffects);
-      const safeName = seq.name.toLowerCase().replace(/[^a-z0-9_-]/g, "_") || "sequence";
-      downloadJsonFile(`${safeName}.vrc-dolly.json`, raw);
+      downloadJsonFile(slugFilename(seq.name, "vrc-dolly.json"), raw);
     }, t("toast.dollyCopied", { name: seq.name }));
   }
 
@@ -937,6 +884,83 @@
             <li>{t("settings.companionFuture")}</li>
           </ul>
         </section>
+
+        <section class="card avatar-card">
+          <div class="card-head-avatar">
+            <div>
+              <h3>{t("settings.avatarIntegrationTitle")}</h3>
+              <p class="sub">{t("settings.avatarIntegrationDesc")}</p>
+            </div>
+            <span class="avatar-state-badge {avatarSnapshot?.state ?? 'idle'}">
+              {avatarSnapshot ? t(`avatar.state.${avatarSnapshot.state}`) : t("avatar.state.idle")}
+            </span>
+          </div>
+
+          <div class="diag-grid">
+            <div>
+              <span class="diag-k">{t("settings.avatarDetected")}</span>
+              <code>{avatarSnapshot?.currentAvatarId ?? t("settings.avatarNone")}</code>
+            </div>
+            <div>
+              <span class="diag-k">{t("settings.avatarLastAction")}</span>
+              <code>
+                {avatarSnapshot ? `Iris_Action = ${avatarSnapshot.lastAction}` : "0"}
+                <span class="action-pill {avatarSnapshot?.actionArmed ? 'armed' : 'rearming'}">
+                  {avatarSnapshot?.actionArmed ? t("settings.avatarArmed") : t("settings.avatarRearming")}
+                </span>
+              </code>
+            </div>
+            <div>
+              <span class="diag-k">{t("studio.duration")}:</span>
+              <code>
+                {avatarSnapshot?.durationSeconds.toFixed(1) ?? "10.0"}s ({((avatarSnapshot?.durationNormalized ?? 0.5) * 100).toFixed(0)}%)
+              </code>
+            </div>
+            <div>
+              <span class="diag-k">{t("settings.avatarRigStatus")}</span>
+              <code class="rig-status-code">
+                {#if typeof avatarSnapshot?.rigSnapshot.status === "object" && "pendingVrcLimitations" in avatarSnapshot.rigSnapshot.status}
+                  {avatarSnapshot.rigSnapshot.status.pendingVrcLimitations}
+                {:else}
+                  OK
+                {/if}
+              </code>
+            </div>
+            <div>
+              <span class="diag-k">{t("settings.avatarRigSegments")}</span>
+              <code>
+                {avatarSnapshot?.rigSnapshot.boneCount ?? 16} {t("settings.avatarRigSegments").toLowerCase()} {avatarSnapshot?.rigSnapshot.totalDistanceM.toFixed(2) ?? "0.00"}m
+              </code>
+            </div>
+          </div>
+
+          <div class="avatar-sim-controls">
+            <span class="sim-label">{t("settings.avatarSimulateTitle")}</span>
+            <div class="sim-buttons">
+              <button type="button" class="btn-diag ghost" onclick={() => handleSimulateAvatarAction(1)}>
+                Capturar A (1)
+              </button>
+              <button type="button" class="btn-diag ghost" onclick={() => handleSimulateAvatarAction(2)}>
+                Capturar B (2)
+              </button>
+              <button type="button" class="btn-diag ghost" onclick={() => handleSimulateAvatarAction(3)}>
+                Previsualizar (3)
+              </button>
+              <button type="button" class="btn-diag primary" onclick={() => handleSimulateAvatarAction(4)}>
+                Ejecutar (4)
+              </button>
+              <button type="button" class="btn-diag ghost" onclick={() => handleSimulateAvatarAction(5)}>
+                Detener (5)
+              </button>
+              <button type="button" class="btn-diag ghost" onclick={() => handleSimulateAvatarAction(6)}>
+                Limpiar (6)
+              </button>
+              <button type="button" class="btn-diag ghost" onclick={() => handleSimulateAvatarAction(0)}>
+                Rearmar (0)
+              </button>
+            </div>
+          </div>
+        </section>
       </div>
     {/if}
 
@@ -1491,6 +1515,98 @@
     display: flex;
     flex-direction: column;
     gap: 6px;
+  }
+  .card-head-avatar {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-bottom: 12px;
+  }
+  .avatar-state-badge {
+    padding: 3px 9px;
+    border-radius: 999px;
+    font-size: 0.76rem;
+    font-weight: 600;
+    background: rgba(184, 169, 255, 0.12);
+    color: var(--text-2);
+    border: 1px solid rgba(184, 169, 255, 0.2);
+  }
+  .avatar-state-badge.ready {
+    background: rgba(16, 185, 129, 0.15);
+    color: #34d399;
+    border-color: rgba(16, 185, 129, 0.35);
+  }
+  .avatar-state-badge.playing,
+  .avatar-state-badge.previewing {
+    background: rgba(59, 130, 246, 0.15);
+    color: #60a5fa;
+    border-color: rgba(59, 130, 246, 0.35);
+  }
+  .avatar-state-badge.error {
+    background: rgba(239, 68, 68, 0.15);
+    color: #f87171;
+    border-color: rgba(239, 68, 68, 0.35);
+  }
+  .action-pill {
+    margin-left: 6px;
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-size: 0.7rem;
+    font-weight: 600;
+  }
+  .action-pill.armed {
+    background: rgba(16, 185, 129, 0.15);
+    color: #34d399;
+  }
+  .action-pill.rearming {
+    background: rgba(245, 158, 11, 0.15);
+    color: #fbbf24;
+  }
+  .rig-status-code {
+    font-size: 0.75rem;
+    color: var(--text-2);
+  }
+  .avatar-sim-controls {
+    margin-top: 14px;
+    padding-top: 12px;
+    border-top: 1px solid rgba(184, 169, 255, 0.1);
+  }
+  .sim-label {
+    display: block;
+    font-size: 0.78rem;
+    color: var(--text-2);
+    margin-bottom: 8px;
+    font-weight: 500;
+  }
+  .sim-buttons {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .btn-diag {
+    padding: 5px 10px;
+    font-size: 0.78rem;
+    font-weight: 500;
+    border-radius: 6px;
+    cursor: pointer;
+    border: 1px solid rgba(184, 169, 255, 0.2);
+    background: rgba(184, 169, 255, 0.08);
+    color: var(--text);
+    transition: background 0.15s ease, border-color 0.15s ease;
+  }
+  .btn-diag:hover {
+    background: rgba(184, 169, 255, 0.18);
+    border-color: var(--accent);
+  }
+  .btn-diag.primary {
+    background: var(--accent);
+    color: #ffffff;
+    border-color: var(--accent);
+  }
+  .btn-diag.primary:hover {
+    filter: brightness(1.1);
   }
   footer {
     margin-top: 32px;

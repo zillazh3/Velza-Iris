@@ -187,6 +187,44 @@ fn eval_base_pose(kfs: &[Keyframe], world_poses: &[Pose], t: f32) -> Pose {
     Pose { pos, rot }
 }
 
+/// Muestrea la pose base interpolada en un instante `t` exacto a lo largo de la spline de la secuencia.
+pub fn sample_base_pose_at(project: &SequenceProject, active_anchor: Option<&Anchor>, t: f32) -> Pose {
+    let mut kfs = project.keyframes.clone();
+    kfs.sort_by(|a, b| a.time.partial_cmp(&b.time).unwrap_or(std::cmp::Ordering::Equal));
+    let scale = project.trajectory_scale;
+    let fallback_anchor = project.anchor_snapshot.as_ref();
+    let world_poses: Vec<Pose> = kfs
+        .iter()
+        .map(|k| k.world_pose(project.space, active_anchor, fallback_anchor, scale))
+        .collect();
+    eval_base_pose(&kfs, &world_poses, t)
+}
+
+/// Escala proporcionalmente los timestamps de los keyframes para que el recorrido espacial
+/// abarque exactamente la duración objetivo (`target_duration`), evitando que la cámara se detenga
+/// prematuramente mientras los efectos de zoom o la secuencia continúan.
+pub fn fit_keyframes_to_duration(kfs: &mut [Keyframe], target_duration: f32) {
+    if kfs.len() < 2 || target_duration <= 0.05 {
+        return;
+    }
+    kfs.sort_by(|a, b| a.time.partial_cmp(&b.time).unwrap_or(std::cmp::Ordering::Equal));
+    let t_min = kfs.first().map(|k| k.time).unwrap_or(0.0);
+    let t_max = kfs.last().map(|k| k.time).unwrap_or(0.0);
+    let span = t_max - t_min;
+    if span <= 1e-4 {
+        // Si todos los puntos tenían el mismo timestamp, espaciarlos uniformemente
+        let step = target_duration / (kfs.len() - 1) as f32;
+        for (i, kf) in kfs.iter_mut().enumerate() {
+            kf.time = ((i as f32 * step * 100.0).round() / 100.0).min(target_duration);
+        }
+        return;
+    }
+    for kf in kfs.iter_mut() {
+        let normalized = (kf.time - t_min) / span;
+        kf.time = ((normalized * target_duration * 100.0).round() / 100.0).min(target_duration);
+    }
+}
+
 /// Aplica un clip de efecto no destructivo sobre la pose y parámetros ópticos en el instante `t`.
 fn apply_effect_clip(
     clip: &EffectClip,
@@ -224,20 +262,20 @@ fn apply_effect_clip(
     match clip.kind {
         EffectKind::DollyIn => {
             let dist = clip.param_a.unwrap_or(0.8) * k * u;
-            for i in 0..3 {
-                pose.pos[i] += fwd[i] * dist;
+            for (p, &f) in pose.pos.iter_mut().zip(&fwd) {
+                *p += f * dist;
             }
         }
         EffectKind::DollyOut => {
             let dist = clip.param_a.unwrap_or(1.2) * k * u;
-            for i in 0..3 {
-                pose.pos[i] -= fwd[i] * dist;
+            for (p, &f) in pose.pos.iter_mut().zip(&fwd) {
+                *p -= f * dist;
             }
         }
         EffectKind::Truck => {
             let dist = clip.param_a.unwrap_or(0.8) * k * u;
-            for i in 0..3 {
-                pose.pos[i] += rgt[i] * dist;
+            for (p, &r) in pose.pos.iter_mut().zip(&rgt) {
+                *p += r * dist;
             }
         }
         EffectKind::Crane => {
@@ -335,8 +373,8 @@ fn apply_effect_clip(
         }
         EffectKind::DollyZoom => {
             let dist_delta = clip.param_a.filter(|v| v.is_finite()).unwrap_or(1.5) * k * u;
-            for i in 0..3 {
-                pose.pos[i] -= fwd[i] * dist_delta;
+            for (p, &f) in pose.pos.iter_mut().zip(&fwd) {
+                *p -= f * dist_delta;
             }
             let d = dist3(pose.pos, pivot).max(0.3);
             let per_meter = clip.param_b.filter(|v| v.is_finite()).unwrap_or(22.0);
@@ -775,5 +813,38 @@ mod tests {
         let ev_dur_nan = evaluate(&p, None, 2.0);
         assert!(ev_dur_nan.base_pose.to_args().is_ok());
         assert!(ev_dur_nan.final_pose.to_args().is_ok());
+    }
+
+    #[test]
+    fn fit_keyframes_scales_times_to_target_duration() {
+        let mut kfs = vec![
+            make_kf("A", 0.0, [0.0, 1.6, 0.0], 0.0),
+            make_kf("B", 2.5, [1.0, 1.6, 0.0], 0.0),
+            make_kf("C", 5.0, [2.0, 1.6, 0.0], 0.0),
+        ];
+        fit_keyframes_to_duration(&mut kfs, 15.0);
+        assert!((kfs[0].time - 0.0).abs() < 1e-3);
+        assert!((kfs[1].time - 7.5).abs() < 1e-2);
+        assert!((kfs[2].time - 15.0).abs() < 1e-2);
+    }
+
+    #[test]
+    fn zero_displacement_optical_segments_evaluate_safely() {
+        use crate::studio::model::LookTrackPoint;
+        let mut p = SequenceProject::new("zero-disp", "Zoom Plateau", 10.0);
+        let mut kf1 = make_kf("A", 0.0, [0.0, 1.6, 0.0], 0.0);
+        kf1.look = LookTrackPoint { zoom: Some(35.0), ..LookTrackPoint::default() };
+        let mut kf2 = make_kf("B", 4.0, [2.0, 1.6, 0.0], 0.0);
+        kf2.look = LookTrackPoint { zoom: Some(35.0), ..LookTrackPoint::default() };
+        // Mismo punto espacial pero zoom diferente
+        let mut kf3 = make_kf("C", 7.0, [2.0, 1.6, 0.0], 0.0);
+        kf3.look = LookTrackPoint { zoom: Some(100.0), ..LookTrackPoint::default() };
+        p.keyframes = vec![kf1, kf2, kf3];
+
+        let ev_mid_zoom = evaluate(&p, None, 5.5);
+        assert_eq!(ev_mid_zoom.base_pose.pos, [2.0, 1.6, 0.0]);
+        assert!(ev_mid_zoom.zoom.is_some());
+        let z = ev_mid_zoom.zoom.unwrap();
+        assert!(z > 35.0 && z < 100.0, "zoom esperado intermedio pero fue {}", z);
     }
 }

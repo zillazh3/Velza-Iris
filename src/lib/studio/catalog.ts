@@ -1,4 +1,4 @@
-import type { EffectClip, EffectKind } from "$lib/api";
+import type { Anchor, CalibrationConfig, CinematicConfig, EffectClip, EffectKind, SequenceProject } from "$lib/api";
 import { t, type Key } from "$lib/i18n/index.svelte";
 
 export type EffectCategory = "movement" | "micro" | "optics";
@@ -241,5 +241,53 @@ export function createEffectClip(
     paramB: entry.defaultParamB,
     easing: "smooth",
     enabled: true,
+  };
+}
+
+export function defaultCinematicConfig(): CinematicConfig {
+  return {
+    profile: "cinematic",
+    inertiaTau: 0.18,
+    maxLinearSpeed: 4.5,
+    maxLinearAccel: 8.0,
+    maxAngularSpeed: 180.0,
+    organicVariation: 0.0,
+    organicSeed: 42,
+  };
+}
+
+export function defaultCalibrationConfig(): CalibrationConfig {
+  return {
+    enabled: true,
+    autoCorrect: false,
+    posOffset: [0, 0, 0],
+    yawOffsetDeg: 0,
+    pitchOffsetDeg: 0,
+    compositionX: 0,
+    compositionY: 0,
+    leadRoom: 0,
+  };
+}
+
+export function createDefaultSequenceProject(
+  name = "Nueva Secuencia",
+  anchor: Anchor | null = null,
+): SequenceProject {
+  return {
+    schemaVersion: 2,
+    id: `seq-${Date.now()}`,
+    name,
+    duration: 10,
+    durationUnit: "seconds",
+    durationInputMode: "valueUnit",
+    space: "anchor",
+    anchorSnapshot: anchor,
+    trajectoryScale: 1,
+    target: null,
+    cinematic: defaultCinematicConfig(),
+    calibration: defaultCalibrationConfig(),
+    keyframes: [],
+    effects: [],
+    rawRecording: [],
   };
 }

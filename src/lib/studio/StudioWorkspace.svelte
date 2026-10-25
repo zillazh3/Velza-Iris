@@ -60,7 +60,17 @@
     type Transition,
   } from "$lib/api";
   import { t, pointLabel, formatKeyframeLabel, localizeError, localizeMotionName, type Key } from "$lib/i18n/index.svelte";
-  import { createEffectClip, EFFECT_CATALOG, getEffectDesc, getEffectParamALabel, getEffectParamBLabel, type EffectCategory } from "$lib/studio/catalog";
+  import {
+    createDefaultSequenceProject,
+    createEffectClip,
+    defaultCalibrationConfig,
+    defaultCinematicConfig,
+    EFFECT_CATALOG,
+    getEffectDesc,
+    getEffectParamALabel,
+    getEffectParamBLabel,
+    type EffectCategory,
+  } from "$lib/studio/catalog";
   import {
     adaptiveSnapStep,
     applyProjectDurationChange,
@@ -263,26 +273,8 @@
   } | null>(null);
   let lastSyncedDurationKey = "";
 
-  const defaultCinematic: CinematicConfig = {
-    profile: "cinematic",
-    inertiaTau: 0.18,
-    maxLinearSpeed: 4.5,
-    maxLinearAccel: 8.0,
-    maxAngularSpeed: 180.0,
-    organicVariation: 0.0,
-    organicSeed: 42,
-  };
-
-  const defaultCalibration: CalibrationConfig = {
-    enabled: true,
-    autoCorrect: false,
-    posOffset: [0, 0, 0],
-    yawOffsetDeg: 0,
-    pitchOffsetDeg: 0,
-    compositionX: 0,
-    compositionY: 0,
-    leadRoom: 0,
-  };
+  const defaultCinematic: CinematicConfig = defaultCinematicConfig();
+  const defaultCalibration: CalibrationConfig = defaultCalibrationConfig();
 
   function ensureProjectConfigs() {
     if (!Number.isFinite(activeProject.duration) || activeProject.duration <= 0) {
@@ -410,6 +402,16 @@
           k.look.focalDistance !== null ||
           k.look.aperture !== null,
       ),
+  );
+
+  const lastKeyframeTime = $derived(
+    activeProject.keyframes.length > 0
+      ? Math.max(...activeProject.keyframes.map((k) => k.time))
+      : 0,
+  );
+  const keyframesNeedFitting = $derived(
+    activeProject.keyframes.length >= 2 &&
+      lastKeyframeTime < activeProject.duration - 0.75,
   );
 
   const filteredCatalog = $derived(
@@ -619,20 +621,50 @@
     }, t("toast.pointUpdated", { label: selectedKeyframe.label }));
   }
 
-  function duplicateSelectedKeyframe() {
+  async function duplicateSelectedKeyframe() {
     if (!selectedKeyframe) return;
     pushUndoSnapshot();
     const newTime = Math.min(activeProject.duration, Math.round((selectedKeyframe.time + 1.5) * 10) / 10);
+    let sampledPose = selectedKeyframe.rawPose;
+    try {
+      sampledPose = await api.sampleBasePoseAt(activeProject, newTime);
+    } catch {
+      // fallback a evaluatedFrame si está disponible
+      if (evaluatedFrame?.basePose) {
+        sampledPose = evaluatedFrame.basePose;
+      }
+    }
     const copy: Keyframe = {
       ...structuredClone(selectedKeyframe),
       id: `kf-dup-${Date.now()}`,
       label: `${selectedKeyframe.label} ${t("studio.copySuffix")}`,
       time: newTime,
+      rawPose: sampledPose,
+      localPose:
+        activeProject.space === "anchor" && activeProject.anchorSnapshot
+          ? {
+              pos: [
+                sampledPose.pos[0] - activeProject.anchorSnapshot.eye[0],
+                sampledPose.pos[1] - activeProject.anchorSnapshot.eye[1],
+                sampledPose.pos[2] - activeProject.anchorSnapshot.eye[2],
+              ],
+              rot: [...sampledPose.rot],
+            }
+          : null,
     };
     activeProject.keyframes = [...activeProject.keyframes, copy].sort((a, b) => a.time - b.time);
     selectedKeyframeId = copy.id;
     playheadTime = copy.time;
     void refreshMathPreview(false);
+  }
+
+  async function fitKeyframesToDuration() {
+    if (activeProject.keyframes.length < 2) return;
+    pushUndoSnapshot();
+    await run(async () => {
+      activeProject = await api.fitKeyframesToDuration(activeProject, activeProject.duration);
+      await refreshMathPreview(false);
+    }, t("studio.toast.keyframesFitted"));
   }
 
   function deleteSelectedKeyframe() {
@@ -1183,23 +1215,7 @@
 
   function createNewProject() {
     pushUndoSnapshot();
-    activeProject = {
-      schemaVersion: 2,
-      id: `seq-${Date.now()}`,
-      name: t("default.newProjectName"),
-      duration: DEFAULT_DURATION_SEC,
-      durationUnit: "seconds",
-      durationInputMode: "valueUnit",
-      space: "anchor",
-      anchorSnapshot: status.anchor,
-      trajectoryScale: 1,
-      target: null,
-      cinematic: structuredClone(defaultCinematic),
-      calibration: structuredClone(defaultCalibration),
-      keyframes: [],
-      effects: [],
-      rawRecording: [],
-    };
+    activeProject = createDefaultSequenceProject(t("default.newProjectName"), status.anchor);
     selectedKeyframeId = null;
     selectedEffectId = null;
     playheadTime = 0;
@@ -2034,6 +2050,16 @@
             </button>
           {/each}
         </div>
+        {#if keyframesNeedFitting}
+          <button
+            type="button"
+            class="dur-pill fit-warn-btn"
+            title={t("studio.fitTooltip", { end: lastKeyframeTime.toFixed(1), total: activeProject.duration.toFixed(1) })}
+            onclick={fitKeyframesToDuration}
+          >
+            <Sparkles size={12} /> {t("studio.fitToDuration")}
+          </button>
+        {/if}
         <button
           type="button"
           class="ghost sm"
@@ -4649,6 +4675,19 @@
     background: var(--accent);
     color: #ffffff;
     font-weight: 600;
+  }
+  .dur-pill.fit-warn-btn {
+    background: rgba(245, 158, 11, 0.15);
+    border: 1px solid rgba(245, 158, 11, 0.4);
+    color: #fbbf24;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-weight: 600;
+  }
+  .dur-pill.fit-warn-btn:hover {
+    background: rgba(245, 158, 11, 0.28);
+    color: #fef3c7;
   }
   .dur-unit-select-wrap {
     min-width: 90px;

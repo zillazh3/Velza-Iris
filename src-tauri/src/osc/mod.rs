@@ -66,6 +66,11 @@ impl Osc {
         self.tx.send_to(&bytes, self.target).map(drop).map_err(|e| e.to_string())
     }
 
+    /// Envío directo de un paquete OSC sin conversión de protocolo de cámara.
+    pub fn send_raw(&self, addr: String, args: Vec<rosc::OscType>) -> Result<(), String> {
+        self.send(addr, args)
+    }
+
     /// Slider, toggle, modo o acción; el valor se valida y recorta en `protocol::encode`.
     pub fn set(&self, name: &str, value: Value) -> Result<(), String> {
         let (addr, args) = encode(name, value)?;
