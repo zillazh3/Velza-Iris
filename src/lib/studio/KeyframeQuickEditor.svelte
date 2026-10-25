@@ -142,9 +142,12 @@
             max="300"
             step="1"
             placeholder="Sin cambio"
-            value={keyframe.look.zoom ?? ""}
+            value={keyframe.look?.zoom ?? ""}
             oninput={(e) => {
               const val = e.currentTarget.value.trim();
+              if (!keyframe.look) {
+                keyframe.look = { zoom: null, exposure: null, focalDistance: null, aperture: null };
+              }
               keyframe.look.zoom = val === "" ? null : Number(val);
               onchange();
             }}

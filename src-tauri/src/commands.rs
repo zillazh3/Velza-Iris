@@ -153,33 +153,39 @@ impl App {
         let cam_snap = self.camera.lock().unwrap().as_ref().map(|c| c.state.lock().unwrap().snapshot());
         let anchor = self.current_anchor();
 
-        match &cmd {
+        let maybe_req = match &cmd {
             crate::avatar::validator::ValidatedAvatarCommand::Action(act) => {
                 let action = *act;
                 match service.handle_action_with_camera(action, cam_snap.as_ref(), anchor.as_ref()) {
-                    Ok(Some(req)) => {
-                        let proj = service.project.clone();
-                        let looping = service.looping;
-                        drop(service);
-                        match req {
-                            AvatarExecutionRequest::StartPlayback { live_osc } => {
-                                let st = app.state::<App>();
-                                let _ = play_sequence_internal(&app, &st, proj, 0.0, looping, live_osc);
-                            }
-                            AvatarExecutionRequest::StopPlayback => {
-                                self.halt();
-                            }
-                        }
-                    }
-                    Ok(None) => {}
+                    Ok(req) => req,
                     Err(e) => {
                         eprintln!("[Avatar OSC] Acción {:?} rechazada: {}", action, e);
+                        None
                     }
                 }
             }
             _ => {
                 if let Err(e) = CommandRouter::route(&mut service, cmd) {
                     eprintln!("[Avatar OSC] Error en enrutador de avatar: {}", e);
+                }
+                None
+            }
+        };
+
+        let proj = service.project.clone();
+        let looping = service.looping;
+        // Liberamos explícitamente el candado antes de iniciar reproducción o sincronizar OSC
+        // para prevenir deadlocks en el hilo de escucha (`std::sync::Mutex` no es reentrante).
+        drop(service);
+
+        if let Some(req) = maybe_req {
+            match req {
+                AvatarExecutionRequest::StartPlayback { live_osc } => {
+                    let st = app.state::<App>();
+                    let _ = play_sequence_internal(&app, &st, proj, 0.0, looping, live_osc);
+                }
+                AvatarExecutionRequest::StopPlayback => {
+                    self.halt();
                 }
             }
         }
@@ -217,10 +223,12 @@ impl App {
         let anchor = self.current_anchor();
         let mut service = self.avatar_service.lock().unwrap();
         let req = service.handle_action_with_camera(action, cam_snap.as_ref(), anchor.as_ref())?;
+        let proj = service.project.clone();
+        let looping = service.looping;
+        // Liberar el mutex antes de reproducir o llamar a sync_avatar_osc_state para evitar deadlocks
+        drop(service);
+
         if let Some(r) = req {
-            let proj = service.project.clone();
-            let looping = service.looping;
-            drop(service);
             match r {
                 AvatarExecutionRequest::StartPlayback { live_osc } => {
                     let st = app.state::<App>();
