@@ -386,7 +386,7 @@
 
         {#if items.length === 0}
           <li class="iris-empty-state">
-            <span>Sin opciones disponibles</span>
+            <span>{t("select.noOptions")}</span>
           </li>
         {/if}
       </ul>

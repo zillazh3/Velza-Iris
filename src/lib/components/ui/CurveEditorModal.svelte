@@ -558,4 +558,52 @@
     display: flex;
     gap: 8px;
   }
+
+  :global(:root[data-theme="light"]) .curve-modal-backdrop {
+    background: rgba(0, 0, 0, 0.4);
+  }
+  :global(:root[data-theme="light"]) .curve-modal {
+    background: #ffffff;
+    border-color: rgba(0, 0, 0, 0.1);
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.12);
+  }
+  :global(:root[data-theme="light"]) .cm-head {
+    border-bottom-color: rgba(0, 0, 0, 0.06);
+  }
+  :global(:root[data-theme="light"]) .cm-title-wrap h3 {
+    color: #12101a;
+  }
+  :global(:root[data-theme="light"]) .curve-svg {
+    background: #f5f4fa;
+    border-color: rgba(0, 0, 0, 0.08);
+  }
+  :global(:root[data-theme="light"]) .coord-field {
+    background: #f5f4fa;
+    border-color: rgba(0, 0, 0, 0.08);
+    color: #12101a;
+  }
+  :global(:root[data-theme="light"]) .coord-field input {
+    color: #12101a;
+  }
+  :global(:root[data-theme="light"]) .preset-item {
+    background: #f8f8fb;
+    border-color: rgba(0, 0, 0, 0.06);
+  }
+  :global(:root[data-theme="light"]) .preset-item:hover {
+    background: #eeeaf8;
+  }
+  :global(:root[data-theme="light"]) .preset-item.active {
+    background: #ebe6fa;
+    border-color: var(--accent);
+  }
+  :global(:root[data-theme="light"]) .preset-info strong {
+    color: #12101a;
+  }
+  :global(:root[data-theme="light"]) .preset-info small {
+    color: #66607d;
+  }
+  :global(:root[data-theme="light"]) .cm-footer {
+    background: #faf9fd;
+    border-top-color: rgba(0, 0, 0, 0.06);
+  }
 </style>

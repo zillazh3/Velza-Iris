@@ -1,7 +1,7 @@
 <script lang="ts">
   import { Compass, Eye, Layers, Maximize2 } from "@lucide/svelte";
   import type { EvaluatedFrame, Pose, TrajectoryPreview } from "$lib/api";
-  import { t } from "$lib/i18n/index.svelte";
+  import { t, formatKeyframeLabel } from "$lib/i18n/index.svelte";
 
   let {
     preview,
@@ -388,8 +388,8 @@
   >
     <defs>
       <radialGradient id="vpGlow" cx="50%" cy="50%" r="60%">
-        <stop offset="0%" stop-color="#2a1446" stop-opacity="0.55" />
-        <stop offset="100%" stop-color="#0e0a1a" stop-opacity="0.95" />
+        <stop offset="0%" stop-color="var(--vp-glow-start, #2a1446)" stop-opacity="var(--vp-glow-op1, 0.55)" />
+        <stop offset="100%" stop-color="var(--vp-glow-end, #0e0a1a)" stop-opacity="var(--vp-glow-op2, 0.95)" />
       </radialGradient>
     </defs>
 
@@ -398,7 +398,7 @@
     <!-- Grilla espacial de referencia -->
     <g class="grid-lines">
       {#each gridLines as ln, idx (idx)}
-        <line x1={ln.x1} y1={ln.y1} x2={ln.x2} y2={ln.y2} stroke="rgba(184, 169, 255, 0.07)" stroke-width="1" />
+        <line x1={ln.x1} y1={ln.y1} x2={ln.x2} y2={ln.y2} stroke="var(--vp-grid-line, rgba(184, 169, 255, 0.07))" stroke-width="1" />
       {/each}
     </g>
 
@@ -486,8 +486,8 @@
             stroke={isSelected ? "#ffffff" : "#0e0a1a"}
             stroke-width={isSelected ? 2.5 : 1.5}
           />
-          <text x={p.x} y={p.y - 12} text-anchor="middle" fill="#ece8ff" font-size="11" font-weight="600">
-            {node.label} ({node.time.toFixed(1)}s)
+          <text x={p.x} y={p.y - 12} text-anchor="middle" fill="var(--vp-node-text, #ece8ff)" font-size="11" font-weight="600">
+            {formatKeyframeLabel(node.label)} ({node.time.toFixed(1)}s)
           </text>
         </g>
       {/each}
@@ -501,7 +501,7 @@
             width="180"
             height="24"
             rx="6"
-            fill="rgba(22, 16, 36, 0.95)"
+            fill="var(--vp-tooltip-bg, rgba(22, 16, 36, 0.95))"
             stroke="var(--accent, #3d5afe)"
             stroke-width="1.5"
           />
@@ -509,12 +509,12 @@
             x={pDrag.x}
             y={pDrag.y - 26}
             text-anchor="middle"
-            fill="#ffffff"
+            fill="var(--vp-tooltip-text, #ffffff)"
             font-size="10.5"
             font-weight="600"
             font-family="monospace"
           >
-            {draggingNodeLabel}: {draggingNodePos[0].toFixed(2)}, {draggingNodePos[1].toFixed(2)}, {draggingNodePos[2].toFixed(2)}m
+            {formatKeyframeLabel(draggingNodeLabel)}: {draggingNodePos[0].toFixed(2)}, {draggingNodePos[1].toFixed(2)}, {draggingNodePos[2].toFixed(2)}m
           </text>
         </g>
       {/if}
@@ -565,6 +565,40 @@
     border: 1px solid rgba(184, 169, 255, 0.12);
     border-radius: 14px;
     padding: 12px;
+    --vp-glow-start: #2a1446;
+    --vp-glow-end: #0e0a1a;
+    --vp-glow-op1: 0.55;
+    --vp-glow-op2: 0.95;
+    --vp-node-text: #ece8ff;
+    --vp-grid-line: rgba(184, 169, 255, 0.07);
+    --vp-tooltip-bg: rgba(22, 16, 36, 0.95);
+    --vp-tooltip-text: #ffffff;
+  }
+  :global(:root[data-theme="light"]) .viewport-wrap {
+    background: #ffffff;
+    border-color: rgba(0, 0, 0, 0.08);
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.04);
+    --vp-glow-start: #eae6f7;
+    --vp-glow-end: #f4f3fa;
+    --vp-glow-op1: 0.75;
+    --vp-glow-op2: 0.95;
+    --vp-node-text: #1d1730;
+    --vp-grid-line: rgba(109, 88, 201, 0.15);
+    --vp-tooltip-bg: rgba(255, 255, 255, 0.96);
+    --vp-tooltip-text: #12101a;
+  }
+  :global(:root[data-theme="light"]) .vp-btn {
+    background: rgba(0, 0, 0, 0.04);
+    border-color: rgba(0, 0, 0, 0.08);
+    color: var(--text-2);
+  }
+  :global(:root[data-theme="light"]) .vp-btn.active {
+    background: var(--velvet);
+    color: var(--royal);
+    border-color: var(--accent);
+  }
+  :global(:root[data-theme="light"]) .vp-svg {
+    border-color: rgba(0, 0, 0, 0.08);
   }
   .vp-bar {
     display: flex;

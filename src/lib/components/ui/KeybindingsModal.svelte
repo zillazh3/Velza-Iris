@@ -20,13 +20,13 @@
   let recordingActionId = $state<string | null>(null);
   let selectedCategory = $state<string>("all");
 
-  const categories = [
-    { id: "all", label: "Todos" },
-    { id: "playback", label: "Reproducción" },
-    { id: "navigation", label: "Navegación" },
-    { id: "editing", label: "Edición" },
+  const categories = $derived([
+    { id: "all", label: t("nav.all") },
+    { id: "playback", label: t("keybindings.tab.playback") },
+    { id: "navigation", label: t("keybindings.tab.navigation") },
+    { id: "editing", label: t("keybindings.tab.editing") },
     { id: "timeline", label: "Timeline" },
-  ];
+  ]);
 
   const filteredActions = $derived(
     SHORTCUT_ACTIONS.filter((act) => {
@@ -92,8 +92,8 @@
         <div class="kb-title-wrap">
           <Keyboard size={18} class="accent-icon" />
           <div>
-            <h3>Atajos de Teclado (Preset Premiere Pro)</h3>
-            <p class="kb-subtitle">Personaliza tus combinaciones de teclas para edición y control de cámara.</p>
+            <h3>{t("keybindings.title")} (Premiere Pro)</h3>
+            <p class="kb-subtitle">{t("keybindings.subtitle")}</p>
           </div>
         </div>
         <button type="button" class="ghost icon-btn" onclick={onclose} aria-label="Cerrar">
@@ -106,7 +106,7 @@
           <Search size={14} class="search-icon" />
           <input
             type="text"
-            placeholder="Buscar atajo o acción..."
+            placeholder={t("keybindings.searchPlaceholder")}
             bind:value={searchFilter}
           />
         </div>
@@ -138,13 +138,13 @@
 
             <div class="kb-action-binding">
               {#if isRecording}
-                <span class="recording-badge">Presiona una combinación de teclas...</span>
+                <span class="recording-badge">{t("keybindings.recordingBadge")}</span>
               {:else}
                 <button
                   type="button"
                   class="kbd-btn"
                   class:modified={isModified}
-                  title="Haz clic para reasignar"
+                  title={t("keybindings.remapHelp")}
                   onclick={() => startRecording(act.id)}
                 >
                   <kbd>{currentCombo}</kbd>
@@ -156,7 +156,7 @@
 
         {#if filteredActions.length === 0}
           <div class="kb-empty">
-            <span>No se encontraron atajos para "{searchFilter}"</span>
+            <span>{t("presets.empty")}</span>
           </div>
         {/if}
       </div>
@@ -166,13 +166,13 @@
           type="button"
           class="ghost sm"
           onclick={() => shortcutManager.resetDefaults()}
-          title="Restablece todos los atajos a la disposición estándar de Premiere Pro"
+          title={t("keybindings.resetTooltip")}
         >
-          <RotateCcw size={14} /> Restablecer a Premiere Pro
+          <RotateCcw size={14} /> {t("keybindings.resetBtn")}
         </button>
 
         <button type="button" class="primary sm" onclick={onclose}>
-          <Check size={14} /> Listo
+          <Check size={14} /> OK
         </button>
       </div>
     </div>

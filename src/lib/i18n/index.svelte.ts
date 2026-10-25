@@ -74,6 +74,20 @@ export function pointLabel(idx: number): string {
 }
 
 /**
+ * Retorna el nombre formateado de un keyframe adaptado dinámicamente al idioma actual.
+ * Si el proyecto guardó "Punto A", en inglés se muestra "Point A".
+ * Si guardó "Point A", en español se muestra "Punto A".
+ */
+export function formatKeyframeLabel(label: string | null | undefined): string {
+  if (!label) return "";
+  if (locale === "en") {
+    return label.replace(/^Punto\s+([A-Z0-9]+)/i, "Point $1");
+  } else {
+    return label.replace(/^Point\s+([A-Z0-9]+)/i, "Punto $1");
+  }
+}
+
+/**
  * Localiza mensajes de error técnicos retornados por el backend Tauri u operaciones de herramientas.
  */
 export function localizeError(err: unknown): string {
