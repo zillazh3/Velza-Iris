@@ -582,6 +582,22 @@ mod tests {
     use super::*;
     use crate::studio::model::{LookTrackPoint, ReferenceSpace, Transition};
 
+    /// "Nueva secuencia" crea un proyecto SIN keyframes ni efectos: la vista previa y la trayectoria deben seguir
+    /// evaluándose (sin pánico ni valores no finitos) mientras la línea de tiempo está vacía.
+    #[test]
+    fn empty_project_evaluates_and_samples_without_panicking() {
+        let p = SequenceProject::new("vacio", "Nueva secuencia", 10.0);
+        assert!(p.keyframes.is_empty() && p.effects.is_empty());
+        for t in [0.0_f32, 3.3, 10.0] {
+            let f = evaluate(&p, None, t);
+            assert!(f.final_pose.pos.iter().chain(&f.final_pose.rot).all(|v| v.is_finite()));
+            assert!(f.base_pose.pos.iter().all(|v| v.is_finite()));
+        }
+        let prev = sample_trajectory(&p, None, 90);
+        assert!(prev.nodes.is_empty());
+        assert!(prev.total_distance.is_finite());
+    }
+
     fn make_kf(id: &str, time: f32, pos: [f32; 3], yaw: f32) -> Keyframe {
         Keyframe {
             id: id.into(),
