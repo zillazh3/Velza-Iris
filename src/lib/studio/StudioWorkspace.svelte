@@ -359,8 +359,6 @@
     return entry ? t(entry.labelKey) : kind;
   }
 
-  const fmtVec = (v: number[], digits = 2) => v.map((x) => x.toFixed(digits)).join("  ");
-
   /** "Punto A" / "Point A" -> "A"; etiquetas propias -> sus 2 primeras letras. */
   function shortLabel(label: string | null | undefined) {
     const raw = formatKeyframeLabel(label).trim();
@@ -2546,79 +2544,96 @@
           onUpdateKeyframePos={updateKeyframePos}
         />
 
+        <!-- Lecturas: celdas por eje (mismo lenguaje que los inputs del inspector) -->
+        {#snippet xyz(pos: number[] | null, digits = 2)}
+          <span class="ro-group">
+            {#each ["x", "y", "z"] as const as ax, i (ax)}
+              <AxisInput readonly label={ax.toUpperCase()} axis={ax} value={pos?.[i] ?? null} {digits} />
+            {/each}
+            <span class="ro-unit">m</span>
+          </span>
+        {/snippet}
+        {#snippet rot(r: number[] | null, digits = 0)}
+          <span class="ro-group">
+            {#each [["P", "x"], ["Y", "y"], ["R", "z"]] as const as [letter, ax], i (letter)}
+              <AxisInput readonly label={letter} axis={ax} value={r?.[i] ?? null} {digits} />
+            {/each}
+            <span class="ro-unit">°</span>
+          </span>
+        {/snippet}
+
         <!-- Barra de estado de una línea; el detalle comparativo (VRChat / base / final / feedback) va en el desplegable -->
         <div class="status-strip">
           <span class="tone" class:ok={Boolean(status.camera?.poseFresh)}>
             <i class="dot"></i>{t(status.camera?.poseFresh ? "status.poseFresh" : "status.poseStale")}
           </span>
-          {#if evaluatedFrame}
-            <span class="kv"><b>XYZ</b>{fmtVec(evaluatedFrame.finalPose.pos)}</span>
-            <span class="kv"><b>PYR</b>{fmtVec(evaluatedFrame.finalPose.rot, 0)}°</span>
-            <span class="kv"><b>f</b>{(evaluatedFrame.zoom ?? 45).toFixed(0)} mm</span>
-            <span class="kv"><b>v</b>{(evaluatedFrame.linearSpeedMps ?? 0).toFixed(2)} m/s</span>
-          {/if}
+          {@render xyz(evaluatedFrame?.finalPose.pos ?? null)}
+          {@render rot(evaluatedFrame?.finalPose.rot ?? null)}
+          <AxisInput readonly label="f" axis="none" value={evaluatedFrame ? (evaluatedFrame.zoom ?? 45) : null} digits={0} unit="mm" />
+          <AxisInput readonly label="v" axis="none" value={evaluatedFrame ? (evaluatedFrame.linearSpeedMps ?? 0) : null} digits={2} unit="m/s" />
           {#if telemetry}
             <span
               class="tone"
               class:ok={telemetry.certainty.kind === "measured"}
               class:warn={telemetry.certainty.kind === "estimated"}
             >
-              <i class="dot"></i>{certaintyLabel(telemetry.certainty)}{#if telemetry.posErrorM != null}
-                · {(telemetry.posErrorM * 1000).toFixed(1)} mm{/if}
+              <i class="dot"></i>{certaintyLabel(telemetry.certainty)}
             </span>
+            {#if telemetry.posErrorM != null}
+              <AxisInput readonly label="Δ" axis="none" value={telemetry.posErrorM * 1000} digits={1} unit="mm" />
+            {/if}
           {/if}
           <details class="tele-more">
             <summary>{t("studio.tele.details")}</summary>
             <div class="tele-grid">
-          <div class="tele-col">
-            <span class="tele-label vrc">{t("studio.telemetry1")}</span>
-            {#if status.camera?.poseFresh && status.camera.pose}
-              <code>
-                XYZ: {status.camera.pose.pos.map((v) => v.toFixed(2)).join(", ")} m | PYR:
-                {status.camera.pose.rot.map((v) => v.toFixed(1)).join("°, ")}°
-              </code>
-            {:else}
-              <code class="muted">{t("studio.noRecentTelemetry")}</code>
-            {/if}
-          </div>
-          <div class="tele-col">
-            <span class="tele-label base">{t("studio.telemetry2", { time: playheadTime.toFixed(2) })}</span>
-            {#if evaluatedFrame}
-              <code>
-                XYZ: {evaluatedFrame.basePose.pos.map((v) => v.toFixed(2)).join(", ")} m | PYR:
-                {evaluatedFrame.basePose.rot.map((v) => v.toFixed(1)).join("°, ")}°
-              </code>
-            {/if}
-          </div>
-          <div class="tele-col">
-            <span class="tele-label final">{t("studio.telemetry3")}</span>
-            {#if evaluatedFrame}
-              <code>
-                XYZ: {evaluatedFrame.finalPose.pos.map((v) => v.toFixed(2)).join(", ")} m | Zoom:
-                {(evaluatedFrame.zoom ?? 45).toFixed(0)} mm | Vel:
-                {(evaluatedFrame.linearSpeedMps ?? 0).toFixed(2)} m/s
-              </code>
-            {/if}
-          </div>
-          <div class="tele-col">
-            <span class="tele-label vrc">{t("studio.feedbackTelemetry")}</span>
-            {#if telemetry}
-              <code>
-                {#if telemetry.certainty.kind === "measured"}
-                  {t("studio.telemetry.measured", { seq: telemetry.certainty.seq, age: telemetry.certainty.ageMs })}
-                {:else if telemetry.certainty.kind === "estimated"}
-                  {t("studio.telemetry.estimated", { pct: Math.round(telemetry.certainty.confidence * 100), reason: localizeReason(telemetry.certainty.reason) })}
+              <div class="tele-col">
+                <span class="tele-label">{t("studio.telemetry1")}</span>
+                {#if status.camera?.poseFresh && status.camera.pose}
+                  <div class="ro-row">
+                    {@render xyz(status.camera.pose.pos)}
+                    {@render rot(status.camera.pose.rot, 1)}
+                  </div>
                 {:else}
-                  {t("studio.telemetry.openLoop", { reason: localizeReason(telemetry.certainty.reason) })}
+                  <span class="note">{t("studio.noRecentTelemetry")}</span>
                 {/if}
-                {#if telemetry.posErrorM != null}
-                  | Err: {(telemetry.posErrorM * 1000).toFixed(1)} mm / {(telemetry.rotErrorDeg ?? 0).toFixed(2)}°
+              </div>
+              <div class="tele-col">
+                <span class="tele-label">{t("studio.telemetry2", { time: playheadTime.toFixed(2) })}</span>
+                <div class="ro-row">
+                  {@render xyz(evaluatedFrame?.basePose.pos ?? null)}
+                  {@render rot(evaluatedFrame?.basePose.rot ?? null, 1)}
+                </div>
+              </div>
+              <div class="tele-col">
+                <span class="tele-label">{t("studio.telemetry3")}</span>
+                <div class="ro-row">
+                  {@render xyz(evaluatedFrame?.finalPose.pos ?? null)}
+                  <AxisInput readonly label="f" axis="none" value={evaluatedFrame ? (evaluatedFrame.zoom ?? 45) : null} digits={0} unit="mm" />
+                  <AxisInput readonly label="v" axis="none" value={evaluatedFrame ? (evaluatedFrame.linearSpeedMps ?? 0) : null} digits={2} unit="m/s" />
+                </div>
+              </div>
+              <div class="tele-col">
+                <span class="tele-label">{t("studio.feedbackTelemetry")}</span>
+                {#if telemetry}
+                  {#if telemetry.posErrorM != null}
+                    <div class="ro-row">
+                      <AxisInput readonly label="Δ" axis="none" value={telemetry.posErrorM * 1000} digits={1} unit="mm" />
+                      <AxisInput readonly label="Δ" axis="none" value={telemetry.rotErrorDeg ?? 0} digits={2} unit="°" />
+                    </div>
+                  {/if}
+                  <span class="note">
+                    {#if telemetry.certainty.kind === "measured"}
+                      {t("studio.telemetry.measured", { seq: telemetry.certainty.seq, age: telemetry.certainty.ageMs })}
+                    {:else if telemetry.certainty.kind === "estimated"}
+                      {t("studio.telemetry.estimated", { pct: Math.round(telemetry.certainty.confidence * 100), reason: localizeReason(telemetry.certainty.reason) })}
+                    {:else}
+                      {t("studio.telemetry.openLoop", { reason: localizeReason(telemetry.certainty.reason) })}
+                    {/if}
+                  </span>
+                {:else}
+                  <span class="note">{t("studio.initDiag")}</span>
                 {/if}
-              </code>
-            {:else}
-              <code class="muted">{t("studio.initDiag")}</code>
-            {/if}
-          </div>
+              </div>
             </div>
           </details>
         </div>
@@ -4307,7 +4322,7 @@
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: 4px 18px;
+    gap: 6px 14px;
     padding: 6px 12px;
     border-radius: var(--radius-md);
     background: var(--surface);
@@ -4332,16 +4347,21 @@
   .status-strip .warn .dot {
     background: var(--warn);
   }
-  .kv {
+  .ro-group {
     display: inline-flex;
-    gap: 6px;
-    font-family: var(--font-mono);
-    color: var(--text);
-    font-variant-numeric: tabular-nums;
+    align-items: center;
+    gap: 3px;
   }
-  .kv b {
-    font-weight: 600;
+  .ro-unit {
+    margin-left: 3px;
+    font-size: 0.66rem;
     color: var(--text-muted);
+  }
+  .ro-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 12px;
   }
   .tele-more {
     margin-left: auto;
@@ -4388,11 +4408,8 @@
     text-transform: uppercase;
     color: var(--text-muted);
   }
-  .tele-grid code {
+  .tele-col .note {
     font-size: 0.72rem;
-    color: var(--text);
-  }
-  .tele-grid code.muted {
     color: var(--text-muted);
   }
 
