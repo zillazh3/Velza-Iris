@@ -10,3 +10,9 @@ VelzaIris-data/
 .env.*
 CLAUDE.md
 .claude/
+
+# Rust (del commit inicial de GitHub)
+**/*.rs.bk
+*.pdb
+**/mutants.out*/
+rustc-ice-*.txt
