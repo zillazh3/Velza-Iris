@@ -1,4 +1,4 @@
-import type { Anchor, CalibrationConfig, CinematicConfig, EffectClip, EffectKind, Keyframe, KnotMode, SequenceProject } from "$lib/api";
+import type { Anchor, CalibrationConfig, CinematicConfig, CinematicProfile, EffectClip, EffectKind, Keyframe, KnotMode, SequenceProject } from "$lib/api";
 import { t, pointLabel, type Key } from "$lib/i18n/index.svelte";
 
 export type EffectCategory = "movement" | "micro" | "optics";
@@ -256,6 +256,32 @@ export function defaultCinematicConfig(): CinematicConfig {
   };
 }
 
+export function cinematicForProfile(profile: CinematicProfile): CinematicConfig {
+  if (profile === "precision") {
+    return {
+      profile: "precision",
+      inertiaTau: 0.0,
+      maxLinearSpeed: 12.0,
+      maxLinearAccel: 25.0,
+      maxAngularSpeed: 360.0,
+      organicVariation: 0.0,
+      organicSeed: 42,
+    };
+  }
+  if (profile === "organic") {
+    return {
+      profile: "organic",
+      inertiaTau: 0.24,
+      maxLinearSpeed: 3.5,
+      maxLinearAccel: 6.0,
+      maxAngularSpeed: 140.0,
+      organicVariation: 0.35,
+      organicSeed: 42,
+    };
+  }
+  return defaultCinematicConfig();
+}
+
 export function defaultCalibrationConfig(): CalibrationConfig {
   return {
     enabled: true,
@@ -316,6 +342,7 @@ export function createDefaultSequenceProject(
     duration: 10,
     durationUnit: "seconds",
     durationInputMode: "valueUnit",
+    loop: false,
     space: "anchor",
     anchorSnapshot: anchor,
     trajectoryScale: 1,

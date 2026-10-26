@@ -255,6 +255,7 @@ export type SequenceProject = {
   duration: number;
   durationUnit?: DurationUnit;
   durationInputMode?: DurationInputMode;
+  loop?: boolean;
   space: ReferenceSpace;
   anchorSnapshot: Anchor | null;
   trajectoryScale: number;

@@ -62,6 +62,7 @@
   } from "$lib/api";
   import { t, pointLabel, formatKeyframeLabel, localizeError, localizeMotionName, type Key } from "$lib/i18n/index.svelte";
   import {
+    cinematicForProfile,
     createDefaultSequenceProject,
     createEffectClip,
     defaultCalibrationConfig,
@@ -95,6 +96,7 @@
   import CurveEditorModal, { type BezierCurve } from "$lib/components/ui/CurveEditorModal.svelte";
   import KeybindingsModal from "$lib/components/ui/KeybindingsModal.svelte";
   import KeyframeQuickEditor from "$lib/studio/KeyframeQuickEditor.svelte";
+  import ProjectModal, { type ProjectDraft } from "$lib/studio/ProjectModal.svelte";
   import { shortcutManager } from "$lib/shortcuts/shortcuts.svelte";
 
   let {
@@ -261,8 +263,11 @@
     space: true,
   });
 
-  // Estado de la sección «Configuración del proyecto»
-  let showProjectConfig = $state(false);
+  // Estado de duración compartido con el control rápido de Captura y el modal de proyecto
+  let projectModal = $state<{ open: boolean; mode: "create" | "edit" }>({ open: false, mode: "edit" });
+  // Repetir reproducción: arranca con el valor guardado en el proyecto
+  let looping = $state(false);
+  let loopProjectId = "";
   let configInputMode = $state<DurationInputMode>("valueUnit");
   let configUnit = $state<DurationUnit>("seconds");
   let configValueInput = $state<string>("10");
@@ -351,29 +356,7 @@
   function applyCinematicProfile(profile: CinematicProfile) {
     pushUndoSnapshot();
     ensureProjectConfigs();
-    if (profile === "precision") {
-      activeProject.cinematic = {
-        profile: "precision",
-        inertiaTau: 0.0,
-        maxLinearSpeed: 12.0,
-        maxLinearAccel: 25.0,
-        maxAngularSpeed: 360.0,
-        organicVariation: 0.0,
-        organicSeed: 42,
-      };
-    } else if (profile === "organic") {
-      activeProject.cinematic = {
-        profile: "organic",
-        inertiaTau: 0.24,
-        maxLinearSpeed: 3.5,
-        maxLinearAccel: 6.0,
-        maxAngularSpeed: 140.0,
-        organicVariation: 0.35,
-        organicSeed: 42,
-      };
-    } else {
-      activeProject.cinematic = structuredClone(defaultCinematic);
-    }
+    activeProject.cinematic = cinematicForProfile(profile);
     void refreshMathPreview(false);
   }
 
@@ -533,6 +516,15 @@
       configValueInput = String(secondsToUnitValue(activeProject.duration, unit));
       configMmSsInput = formatSecondsToMmSs(activeProject.duration);
       pendingDurationConflict = null;
+    }
+  });
+
+  $effect(() => {
+    const id = activeProject.id;
+    const saved = activeProject.loop ?? false;
+    if (id !== loopProjectId) {
+      loopProjectId = id;
+      looping = saved;
     }
   });
 
@@ -780,20 +772,6 @@
     void refreshMathPreview(false);
   }
 
-  const parsedConfigDuration = $derived(
-    configInputMode === "valueUnit"
-      ? parseValueUnitInput(configValueInput, configUnit)
-      : parseMmSsInput(configMmSsInput),
-  );
-
-  const effectiveDraftSeconds = $derived(
-    parsedConfigDuration.ok ? parsedConfigDuration.seconds : activeProject.duration,
-  );
-
-  const draftEquivalence = $derived(
-    formatDurationEquivalence(effectiveDraftSeconds, configUnit),
-  );
-
   const captureTimelineTicks = $derived(generateTimelineTicks(activeProject.duration, 1));
   const editorTimelineTicks = $derived(
     generateTimelineTicks(activeProject.duration, timelineZoom),
@@ -813,24 +791,6 @@
     activeProject = {
       ...activeProject,
       durationUnit: nextUnit,
-    };
-  }
-
-  /**
-   * Al cambiar entre modalidades de entrada (Valor y unidad <-> MM:SS),
-   * conserva la duración real en segundos sin reiniciarla ni redondearla innecesariamente.
-   */
-  function switchConfigInputMode(nextMode: DurationInputMode) {
-    if (nextMode === configInputMode) return;
-    const realSeconds = parsedConfigDuration.ok
-      ? parsedConfigDuration.seconds
-      : activeProject.duration;
-    configInputMode = nextMode;
-    configValueInput = String(secondsToUnitValue(realSeconds, configUnit));
-    configMmSsInput = formatSecondsToMmSs(realSeconds);
-    activeProject = {
-      ...activeProject,
-      durationInputMode: nextMode,
     };
   }
 
@@ -882,17 +842,12 @@
           keyframesCount: conflicts.keyframes.length,
           effectsCount: conflicts.effects.length,
         };
-        showProjectConfig = true;
+        projectModal = { open: true, mode: "edit" };
         return;
       }
     }
     // Al aumentar la duración (o reducir sin conflictos), preservar intactos todos los tiempos originales
     commitDurationChange(clampedTarget, "preserve");
-  }
-
-  function handleApplyProjectConfig() {
-    if (!parsedConfigDuration.ok) return;
-    requestDurationChange(parsedConfigDuration.seconds);
   }
 
   function addEffectToTimeline(kind: EffectKind, customStartTime?: number, preferredTrack?: number) {
@@ -1335,8 +1290,27 @@
     void refreshMathPreview(liveScrub);
   }
 
-  /** "Nueva secuencia" = proyecto en blanco: sin keyframes ni efectos (ni los de ejemplo), sin historial del anterior. */
-  async function createNewProject() {
+  /** Aplica a `proj` los campos del modal (todo salvo la duración, que se resuelve aparte). */
+  function withDraftSettings(proj: SequenceProject, d: ProjectDraft): SequenceProject {
+    const cinematic =
+      proj.cinematic?.profile === d.profile ? proj.cinematic : cinematicForProfile(d.profile);
+    return {
+      ...proj,
+      name: d.name,
+      space: d.space,
+      trajectoryScale: d.trajectoryScale,
+      loop: d.loop,
+      cinematic,
+      calibration: {
+        ...(proj.calibration ?? defaultCalibration),
+        enabled: d.calibrationEnabled,
+        autoCorrect: d.autoCorrect,
+      },
+    };
+  }
+
+  /** "Nueva secuencia": en blanco o con la plantilla de arco heroico, sin historial del proyecto anterior. */
+  async function createNewProject(d: ProjectDraft) {
     // Una reproducción en curso sigue con el proyecto anterior: se detiene antes de reemplazarlo.
     if (playbackStatus.state !== "stopped") {
       try {
@@ -1347,7 +1321,13 @@
     }
     // Las ediciones del proyecto que se abandona quedan en la biblioteca en memoria (si estaba guardado).
     syncActiveProjectToLibrary(activeProject);
-    activeProject = createDefaultSequenceProject(t("default.newProjectName"), status.anchor, false);
+    const base = createDefaultSequenceProject(d.name, status.anchor, d.template === "heroic");
+    // "scale": los puntos de la plantilla (0-10 s) se reescalan a la duración elegida
+    activeProject = withDraftSettings(
+      applyProjectDurationChange(base, d.seconds, d.unit, d.inputMode, "scale"),
+      d,
+    );
+    looping = d.loop;
     selectedKeyframeId = null;
     selectedEffectId = null;
     playheadTime = 0;
@@ -1357,6 +1337,36 @@
     trajectoryPreview = null;
     pendingDurationConflict = null;
     void refreshMathPreview(false);
+  }
+
+  function applyProjectSettings(d: ProjectDraft) {
+    pushUndoSnapshot();
+    activeProject = withDraftSettings(activeProject, d);
+    looping = d.loop;
+    configUnit = d.unit;
+    configInputMode = d.inputMode;
+    void refreshMathPreview(false);
+    // Puede abrir el conflicto de duración (el modal sigue abierto); si no, se aplica directo.
+    requestDurationChange(d.seconds);
+    if (!pendingDurationConflict) projectModal.open = false;
+  }
+
+  async function handleProjectConfirm(d: ProjectDraft) {
+    if (projectModal.mode === "create") {
+      await createNewProject(d);
+      projectModal.open = false;
+    } else {
+      applyProjectSettings(d);
+    }
+  }
+
+  function handleConflictResolve(resolution: "clamp" | "scale" | "cancel") {
+    if (resolution === "cancel" || !pendingDurationConflict) {
+      pendingDurationConflict = null;
+      return;
+    }
+    commitDurationChange(pendingDurationConflict.targetSeconds, resolution);
+    projectModal.open = false;
   }
 
   async function saveCurrentSequence() {
@@ -1377,7 +1387,7 @@
     }
     const startAt = playheadTime;
     await run(async () => {
-      await api.playSequence(activeProject, startAt, playbackStatus.looping, liveOsc);
+      await api.playSequence(activeProject, startAt, looping, liveOsc);
     });
   }
 
@@ -1783,7 +1793,12 @@
         placeholder={t("studio.projectName")}
       />
 
-      <button type="button" class="ghost sm" onclick={createNewProject} title={t("studio.newProject")}>
+      <button
+        type="button"
+        class="ghost sm"
+        onclick={() => (projectModal = { open: true, mode: "create" })}
+        title={t("studio.newProject")}
+      >
         <Plus size={15} /> {t("studio.newProject")}
       </button>
 
@@ -1793,20 +1808,13 @@
 
       <button
         type="button"
-        class="ghost sm"
-        class:pressed={showProjectConfig}
-        aria-expanded={showProjectConfig}
-        onclick={() => (showProjectConfig = !showProjectConfig)}
-        title={t("studio.config.subtitle")}
+        class="ghost sm badge-dur"
+        onclick={() => (projectModal = { open: true, mode: "edit" })}
+        aria-label={t("studio.config.button")}
+        title="{t('studio.config.button')} · {t('studio.config.subtitle')}"
       >
-        <Sliders size={15} />
-        <span>{t("studio.config.button")}</span>
-        <span class="badge-dur">
-          {activeProject.durationUnit === "minutes"
-            ? `${secondsToUnitValue(activeProject.duration, "minutes")} min`
-            : `${secondsToUnitValue(activeProject.duration, "seconds")} s`}
-          ({formatSecondsToMmSs(activeProject.duration)})
-        </span>
+        <Sliders size={14} />
+        {formatSecondsToMmSs(activeProject.duration)}
       </button>
 
       <div class="history-btns">
@@ -1855,205 +1863,6 @@
       </button>
     </div>
   </header>
-
-  <!-- SECCIÓN: CONFIGURACIÓN DEL PROYECTO (Duración total personalizable en s, min o MM:SS) -->
-  {#if showProjectConfig || pendingDurationConflict}
-    <section class="project-config-panel card" aria-label={t("studio.config.title")}>
-      <div class="pc-head">
-        <div>
-          <h3><Sliders size={16} /> {t("studio.config.title")}</h3>
-          <p class="sub">{t("studio.config.subtitle")} · {t("studio.config.techLimit")}</p>
-        </div>
-        <button
-          type="button"
-          class="ghost sm"
-          onclick={() => {
-            showProjectConfig = false;
-            pendingDurationConflict = null;
-          }}
-        >
-          {t("studio.close")}
-        </button>
-      </div>
-
-      <div class="pc-grid">
-        <!-- Selector de modalidad de entrada: 1) Valor y unidad  2) Minutos:Segundos (MM:SS) -->
-        <div class="pc-field">
-          <span class="pc-label">{t("studio.config.inputMode")}</span>
-          <div class="mode-switch sm-switch" role="tablist" aria-label={t("studio.config.inputMode")}>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={configInputMode === "valueUnit"}
-              class="mode-tab"
-              class:active={configInputMode === "valueUnit"}
-              onclick={() => switchConfigInputMode("valueUnit")}
-            >
-              {t("studio.config.modeValueUnit")}
-            </button>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={configInputMode === "mmSs"}
-              class="mode-tab"
-              class:active={configInputMode === "mmSs"}
-              onclick={() => switchConfigInputMode("mmSs")}
-            >
-              {t("studio.config.modeMmSs")}
-            </button>
-          </div>
-        </div>
-
-        {#if configInputMode === "valueUnit"}
-          <!-- Modalidad 1: Valor numérico libre (admite decimales) + Selector de unidad (Segundos / Minutos) -->
-          <label class="pc-field">
-            <span class="pc-label">
-              {t("studio.config.durationLabel")} ({configUnit === "minutes" ? "min" : "s"})
-            </span>
-            <input
-              type="number"
-              step="any"
-              min={configUnit === "minutes" ? secondsToUnitValue(MIN_DURATION_SEC, "minutes") : MIN_DURATION_SEC}
-              max={configUnit === "minutes" ? secondsToUnitValue(MAX_DURATION_SEC, "minutes") : MAX_DURATION_SEC}
-              value={configValueInput}
-              oninput={(e) => {
-                configValueInput = e.currentTarget.value;
-                pendingDurationConflict = null;
-              }}
-              onkeydown={(e) => {
-                if (e.key === "Enter") {
-                  e.preventDefault();
-                  handleApplyProjectConfig();
-                }
-              }}
-            />
-          </label>
-
-          <label class="pc-field">
-            <span class="pc-label">{t("studio.config.unitLabel")}</span>
-            <select
-              value={configUnit}
-              onchange={(e) => switchConfigUnit(e.currentTarget.value as DurationUnit)}
-            >
-              <option value="seconds">{t("studio.config.unitSeconds")} (s)</option>
-              <option value="minutes">{t("studio.config.unitMinutes")} (min)</option>
-            </select>
-          </label>
-        {:else}
-          <!-- Modalidad 2: Formato minutos:segundos (MM:SS) -->
-          <label class="pc-field">
-            <span class="pc-label">{t("studio.config.mmSsLabel")}</span>
-            <input
-              type="text"
-              placeholder={t("studio.config.mmSsPlaceholder")}
-              value={configMmSsInput}
-              oninput={(e) => {
-                configMmSsInput = e.currentTarget.value;
-                pendingDurationConflict = null;
-              }}
-              onkeydown={(e) => {
-                if (e.key === "Enter") {
-                  e.preventDefault();
-                  handleApplyProjectConfig();
-                }
-              }}
-            />
-          </label>
-
-          <label class="pc-field">
-            <span class="pc-label">{t("studio.config.unitLabel")}</span>
-            <select
-              value={configUnit}
-              onchange={(e) => switchConfigUnit(e.currentTarget.value as DurationUnit)}
-            >
-              <option value="seconds">{t("studio.config.unitSeconds")} (s)</option>
-              <option value="minutes">{t("studio.config.unitMinutes")} (min)</option>
-            </select>
-          </label>
-        {/if}
-
-        <!-- Duración equivalente y total calculado -->
-        <div class="pc-field pc-equiv">
-          <span class="pc-label">{t("studio.config.equivalent")} / {t("studio.config.calculatedTotal")}</span>
-          <div class="equiv-readout">
-            <strong>{draftEquivalence.secondsText}</strong>
-            <span>·</span>
-            <span>{draftEquivalence.minutesText}</span>
-            <span>·</span>
-            <code>{draftEquivalence.mmSsText}</code>
-          </div>
-        </div>
-
-        <!-- Botón explícito para Aplicar cambios -->
-        <div class="pc-actions">
-          <button
-            type="button"
-            class="primary sm"
-            disabled={!parsedConfigDuration.ok}
-            onclick={handleApplyProjectConfig}
-          >
-            {t("studio.config.apply")}
-          </button>
-        </div>
-      </div>
-
-      {#if !parsedConfigDuration.ok}
-        <p class="studio-alert error" role="alert">
-          {#if parsedConfigDuration.code === "secondsRange"}
-            {t("studio.config.errSecondsRange")}
-          {:else if parsedConfigDuration.code === "range"}
-            {t("studio.config.errRange")}
-          {:else}
-            {t("studio.config.errInvalidNumber")}
-          {/if}
-        </p>
-      {/if}
-
-      {#if pendingDurationConflict}
-        <div class="conflict-box" role="alertdialog" aria-label={t("studio.config.conflictTitle")}>
-          <strong>{t("studio.config.conflictTitle")}</strong>
-          <p>
-            {t("studio.config.conflictDesc", {
-              dur: `${pendingDurationConflict.targetSeconds} s (${formatSecondsToMmSs(pendingDurationConflict.targetSeconds)})`,
-              kf: pendingDurationConflict.keyframesCount,
-              fx: pendingDurationConflict.effectsCount,
-            })}
-          </p>
-          <div class="conflict-actions">
-            <button
-              type="button"
-              class="primary sm"
-              onclick={() =>
-                pendingDurationConflict &&
-                commitDurationChange(pendingDurationConflict.targetSeconds, "clamp")}
-            >
-              {t("studio.config.resolveClamp")}
-            </button>
-            <button
-              type="button"
-              class="ghost sm"
-              onclick={() =>
-                pendingDurationConflict &&
-                commitDurationChange(pendingDurationConflict.targetSeconds, "scale")}
-            >
-              {t("studio.config.resolveScale")}
-            </button>
-            <button
-              type="button"
-              class="ghost sm"
-              onclick={() => {
-                pendingDurationConflict = null;
-                configValueInput = String(secondsToUnitValue(activeProject.duration, configUnit));
-                configMmSsInput = formatSecondsToMmSs(activeProject.duration);
-              }}
-            >
-              {t("studio.config.resolveCancel")}
-            </button>
-          </div>
-        </div>
-      {/if}
-    </section>
-  {/if}
 
   {#if playbackStatus.error}
     <p class="studio-alert error" role="alert">{playbackStatus.error}</p>
@@ -2189,14 +1998,6 @@
             <Sparkles size={12} /> {t("studio.fitToDuration")}
           </button>
         {/if}
-        <button
-          type="button"
-          class="ghost sm"
-          onclick={() => (showProjectConfig = !showProjectConfig)}
-          title={t("studio.config.subtitle")}
-        >
-          <Sliders size={14} /> {formatSecondsToMmSs(activeProject.duration)}
-        </button>
         <div class="dur-select-field" title={t("studio.engineTooltip")}>
           <span class="field-label">{t("studio.profileLabel")}</span>
           <IrisSelect
@@ -2247,11 +2048,11 @@
         <button
           type="button"
           class="ghost icon-only"
-          class:pressed={playbackStatus.looping}
+          class:pressed={looping}
           title={t("studio.loop")}
           onclick={() => {
-            playbackStatus.looping = !playbackStatus.looping;
-            void api.studioControl({ loop: playbackStatus.looping }).catch(() => {});
+            looping = !looping;
+            void api.studioControl({ loop: looping }).catch(() => {});
           }}
         >
           <Repeat size={15} />
@@ -3525,16 +3326,6 @@
         </div>
 
         <div class="ed-tl-tools">
-          <button
-            type="button"
-            class="ghost sm"
-            class:pressed={showProjectConfig}
-            onclick={() => (showProjectConfig = !showProjectConfig)}
-            title={t("studio.config.subtitle")}
-          >
-            <Sliders size={14} /> {t("studio.config.button")} ({formatSecondsToMmSs(activeProject.duration)})
-          </button>
-
           <IrisCheckbox
             variant="checkbox"
             size="sm"
@@ -3812,6 +3603,19 @@
   />
 
   <!-- Modal de Atajos de Teclado Personalizables (Estilo Premiere Pro) -->
+  <ProjectModal
+    open={projectModal.open}
+    mode={projectModal.mode}
+    project={activeProject}
+    conflict={pendingDurationConflict}
+    onconfirm={handleProjectConfirm}
+    onresolve={handleConflictResolve}
+    onclose={() => {
+      projectModal.open = false;
+      pendingDurationConflict = null;
+    }}
+  />
+
   <KeybindingsModal
     bind:open={showKeybindingsModal}
     onclose={() => (showKeybindingsModal = false)}
@@ -3877,7 +3681,7 @@
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    background: var(--surface);
+    background: var(--surface-raised);
     padding: 5px 10px;
     border-radius: 10px;
     color: var(--text-2);
@@ -3885,9 +3689,8 @@
   .project-name-input,
   input[type="text"],
   input[type="number"],
-  input[type="search"],
-  select {
-    background: var(--surface);
+  input[type="search"] {
+    background: var(--surface-raised);
     color: var(--text);
     border-radius: 9px;
     padding: 6px 10px;
@@ -3936,110 +3739,8 @@
     color: #fff;
   }
   .badge-dur {
-    font-size: 0.75rem;
-    padding: 2px 7px;
-    border-radius: 999px;
-    background: rgba(var(--accent-color-rgb), 0.25);
-    color: var(--text-2);
     font-variant-numeric: tabular-nums;
-  }
-
-  /* Panel de Configuración del Proyecto */
-  .project-config-panel {
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-    padding: 14px 18px;
-    border-color: rgba(var(--accent-color-rgb), 0.45);
-    background: linear-gradient(180deg, var(--surface), var(--surface));
-  }
-  .pc-head {
-    display: flex;
-    justify-content: space-between;
-    align-items: flex-start;
-    gap: 12px;
-    flex-wrap: wrap;
-  }
-  .pc-head h3 {
-    margin: 0;
-    font-size: 0.95rem;
-    color: var(--text-2);
-    display: inline-flex;
-    align-items: center;
-    gap: 7px;
-  }
-  .pc-head .sub {
-    margin: 3px 0 0;
-    font-size: 0.78rem;
-    color: var(--text-2);
-  }
-  .pc-grid {
-    display: flex;
-    align-items: flex-end;
-    gap: 14px;
-    flex-wrap: wrap;
-  }
-  .pc-field {
-    display: flex;
-    flex-direction: column;
-    gap: 5px;
-    font-size: 0.8rem;
-    color: var(--text-2);
-  }
-  .pc-label {
-    font-size: 0.76rem;
-    font-weight: 600;
-    color: var(--text-2);
-  }
-  .sm-switch .mode-tab {
-    padding: 5px 11px;
-    font-size: 0.78rem;
-  }
-  .pc-equiv {
-    flex: 1;
-    min-width: 210px;
-  }
-  .equiv-readout {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    padding: 6px 12px;
-    border-radius: 9px;
-    background: var(--surface);
-    color: var(--text);
-    font-size: 0.84rem;
-    font-variant-numeric: tabular-nums;
-  }
-  .equiv-readout code {
-    color: var(--text-2);
-    font-weight: 600;
-  }
-  .pc-actions {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-  .conflict-box {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    padding: 12px 14px;
-    border-radius: 11px;
-    background: rgba(255, 112, 141, 0.12);
-    border: 1px solid rgba(255, 112, 141, 0.45);
-    font-size: 0.82rem;
-  }
-  .conflict-box strong {
-    color: #ff9bb0;
-  }
-  .conflict-box p {
-    margin: 0;
-    color: var(--text);
-  }
-  .conflict-actions {
-    display: flex;
-    gap: 8px;
-    flex-wrap: wrap;
+    font-family: var(--font-mono);
   }
 
   .studio-alert {
