@@ -431,6 +431,9 @@ pub struct SequenceProject {
     /// Modalidad de entrada preferida en la configuración del proyecto (`valueUnit` o `mmSs`).
     #[serde(default)]
     pub duration_input_mode: DurationInputMode,
+    /// Repetir la reproducción por defecto (el toggle del transport arranca con este valor).
+    #[serde(default, rename = "loop")]
+    pub loop_playback: bool,
     #[serde(default)]
     pub space: ReferenceSpace,
     #[serde(default)]
@@ -471,6 +474,7 @@ impl SequenceProject {
             duration: duration.clamp(MIN_PROJECT_DURATION_SEC, MAX_PROJECT_DURATION_SEC),
             duration_unit: DurationUnit::Seconds,
             duration_input_mode: DurationInputMode::ValueUnit,
+            loop_playback: false,
             space: ReferenceSpace::Anchor,
             anchor_snapshot: None,
             trajectory_scale: 1.0,
@@ -547,6 +551,7 @@ impl SequenceProject {
             duration: dur,
             duration_unit: DurationUnit::Seconds,
             duration_input_mode: DurationInputMode::ValueUnit,
+            loop_playback: false,
             space: ReferenceSpace::Anchor,
             anchor_snapshot: Some(eff_anchor),
             trajectory_scale: 1.0,
@@ -737,6 +742,21 @@ impl SequenceProject {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn loop_defaults_false_for_old_projects_and_roundtrips() {
+        let mut v = serde_json::to_value(SequenceProject::new("p", "P", 10.0)).unwrap();
+        v.as_object_mut().unwrap().remove("loop");
+        let old: SequenceProject = serde_json::from_value(v).unwrap();
+        assert!(!old.loop_playback);
+
+        let mut p = SequenceProject::new("p", "P", 10.0);
+        p.loop_playback = true;
+        let json = serde_json::to_value(&p).unwrap();
+        assert_eq!(json["loop"], true);
+        let back: SequenceProject = serde_json::from_value(json).unwrap();
+        assert!(back.loop_playback);
+    }
 
     fn sample_kf(id: &str, time: f32, x: f32) -> Keyframe {
         Keyframe {
