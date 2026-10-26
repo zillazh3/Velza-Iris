@@ -86,7 +86,7 @@
       role="dialog"
       tabindex="-1"
       aria-modal="true"
-      aria-label="Atajos de Teclado"
+      aria-label={t("keybindings.title")}
     >
       <div class="kb-head">
         <div class="kb-title-wrap">
@@ -96,7 +96,7 @@
             <p class="kb-subtitle">{t("keybindings.subtitle")}</p>
           </div>
         </div>
-        <button type="button" class="ghost icon-btn" onclick={onclose} aria-label="Cerrar">
+        <button type="button" class="ghost icon-btn" onclick={onclose} aria-label={t("studio.close")}>
           <X size={16} />
         </button>
       </div>

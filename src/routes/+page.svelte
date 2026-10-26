@@ -60,7 +60,7 @@
   });
   let presets = $state<Preset[]>([]);
   let sequences = $state<SequenceProject[]>([]);
-  let activeProject = $state<SequenceProject>(createDefaultSequenceProject("Arco Heroico Cinematográfico"));
+  let activeProject = $state<SequenceProject>(createDefaultSequenceProject(t("default.projectName")));
 
   let message = $state<{ text: string; ok: boolean } | null>(null);
   let visualizerSnapshot = $state<VisualizerSnapshot | null>(null);
@@ -85,9 +85,9 @@
     try {
       await api.visualizerActivate();
       await pollVisualizerStatus();
-      message = { text: "Gizmo encendido: sigue a la cámara de VRChat sin calibrar", ok: true };
+      message = { text: t("visualizer.toast.on"), ok: true };
     } catch (e: any) {
-      message = { text: String(e), ok: false };
+      message = { text: localizeError(e), ok: false };
     }
   }
 
@@ -99,7 +99,7 @@
       await api.visualizerNudge(dx * 0.01 * k, dy * 0.01 * k, dz * 0.01 * k, dyaw * k);
       await pollVisualizerStatus();
     } catch (e: any) {
-      message = { text: String(e), ok: false };
+      message = { text: localizeError(e), ok: false };
     }
   }
 
@@ -108,7 +108,7 @@
       await api.visualizerResetNudge();
       await pollVisualizerStatus();
     } catch (e: any) {
-      message = { text: String(e), ok: false };
+      message = { text: localizeError(e), ok: false };
     }
   }
 
@@ -127,7 +127,7 @@
       await api.visualizerSetHideCam(!visualizerSnapshot?.hideCam);
       await pollVisualizerStatus();
     } catch (e: any) {
-      message = { text: String(e), ok: false };
+      message = { text: localizeError(e), ok: false };
     }
   }
 
@@ -135,9 +135,9 @@
     try {
       await api.visualizerResetAnchor();
       await pollVisualizerStatus();
-      message = { text: "Gizmo apagado", ok: true };
+      message = { text: t("visualizer.toast.off"), ok: true };
     } catch (e: any) {
-      message = { text: String(e), ok: false };
+      message = { text: localizeError(e), ok: false };
     }
   }
 
@@ -145,9 +145,9 @@
     try {
       await api.visualizerSyncPath(activeProject);
       await pollVisualizerStatus();
-      message = { text: "Sincronización del Path de 5 huesos encolada (Flujo B)", ok: true };
+      message = { text: t("visualizer.toast.pathQueued"), ok: true };
     } catch (e: any) {
-      message = { text: String(e), ok: false };
+      message = { text: localizeError(e), ok: false };
     }
   }
   let selectedCategory = $state<"all" | Category>("all");
@@ -964,8 +964,8 @@
         <section class="card avatar-card">
           <div class="card-head-avatar">
             <div>
-              <h3>Visualizador VRChat (Avatars 3.0 / Unity)</h3>
-              <p class="sub">Rig de visualización de cámara y deformación de trayectoria de 5 huesos por OSC. «Mostrar gizmo» enciende el rig en el mundo: el gizmo sigue a la cámara de VRChat sin calibrar. Tú ves la pose y el path exactos al instante; los demás jugadores reciben el path de 8 puntos por el bus de red (~12 s la primera vez) y ven el recorrido interpolado y suavizado. Si lo ves corrido un poco, corrígelo con el ajuste fino. Al cambiar de avatar vuelve a pulsar «Mostrar gizmo».</p>
+              <h3>{t("visualizer.title")}</h3>
+              <p class="sub">{t("visualizer.desc")}</p>
             </div>
             <span class="avatar-state-badge {visualizerSnapshot?.enabled ? 'ready' : 'idle'}">
               {visualizerSnapshot?.enabled ? "iris_enable = true" : "iris_enable = false"}
@@ -974,17 +974,17 @@
 
           <div class="diag-grid">
             <div>
-              <span class="diag-k">Región del rig (centro, mundo):</span>
+              <span class="diag-k">{t("visualizer.rigRegion")}</span>
               <code>
                 {#if visualizerSnapshot?.anchorPosition}
-                  [{visualizerSnapshot.anchorPosition.map((v) => v.toFixed(1)).join(", ")}] m · remotos: {visualizerSnapshot.netMode === "path" ? "siguen el recorrido" : "pose retenida"}
+                  [{visualizerSnapshot.anchorPosition.map((v) => v.toFixed(1)).join(", ")}] m · {t("visualizer.remotes", { mode: t(visualizerSnapshot.netMode === "path" ? "visualizer.remotes.path" : "visualizer.remotes.held") })}
                 {:else}
-                  Apagado
+                  {t("visualizer.off")}
                 {/if}
               </code>
             </div>
             <div>
-              <span class="diag-k">Cámara OSC Normalizada (cam_x/y/z):</span>
+              <span class="diag-k">{t("visualizer.camPos")}</span>
               <code>
                 {#if visualizerSnapshot?.lastCamNormalizedPos}
                   [{visualizerSnapshot.lastCamNormalizedPos[0].toFixed(3)}, {visualizerSnapshot.lastCamNormalizedPos[1].toFixed(3)}, {visualizerSnapshot.lastCamNormalizedPos[2].toFixed(3)}]
@@ -994,7 +994,7 @@
               </code>
             </div>
             <div>
-              <span class="diag-k">Rotación OSC (cam_rx/ry/rz):</span>
+              <span class="diag-k">{t("visualizer.camRot")}</span>
               <code>
                 {#if visualizerSnapshot?.lastCamNormalizedRot}
                   [{visualizerSnapshot.lastCamNormalizedRot[0].toFixed(3)}, {visualizerSnapshot.lastCamNormalizedRot[1].toFixed(3)}, {visualizerSnapshot.lastCamNormalizedRot[2].toFixed(3)}]
@@ -1004,14 +1004,14 @@
               </code>
             </div>
             <div>
-              <span class="diag-k">Bus de red hacia los remotos (path de 8 puntos):</span>
+              <span class="diag-k">{t("visualizer.netBus")}</span>
               <code>
-                {visualizerSnapshot?.isSyncingPath ? "Enviando a los demás jugadores (~12 s; tú lo ves al instante)..." : "Listo"}
+                {visualizerSnapshot?.isSyncingPath ? t("visualizer.syncing") : t("visualizer.ready")}
               </code>
             </div>
             <div>
-              <span class="diag-k">Estado del Sistema:</span>
-              <code>{visualizerSnapshot?.lastError ? visualizerSnapshot.lastError : "OK (12 endpoints activos)"}</code>
+              <span class="diag-k">{t("visualizer.systemState")}</span>
+              <code>{visualizerSnapshot?.lastError ? localizeError(visualizerSnapshot.lastError) : t("visualizer.systemOk")}</code>
             </div>
           </div>
 
@@ -1019,37 +1019,43 @@
             {@const dg = visualizerSnapshot.diag}
             <div class="diag-grid">
               <div>
-                <span class="diag-k">Sincronización con la cámara real:</span>
+                <span class="diag-k">{t("visualizer.cameraSync")}</span>
                 <code>
-                  ecos de pose {dg.poseEchoes} · enviados al rig {dg.framesSent} · omitidos: apagado {dg.skipped.disabled},
-                  sin ancla {dg.skipped.noAnchor}, recorrido {dg.skipped.externalControl}, sin cambio {dg.skipped.deadband},
-                  ocupado {dg.skipped.busy}
+                  {t("visualizer.syncCounters", {
+                    echoes: dg.poseEchoes,
+                    sent: dg.framesSent,
+                    disabled: dg.skipped.disabled,
+                    noAnchor: dg.skipped.noAnchor,
+                    external: dg.skipped.externalControl,
+                    deadband: dg.skipped.deadband,
+                    busy: dg.skipped.busy,
+                  })}
                 </code>
-                {#if dg.lastError}<code>último error: {dg.lastError}</code>{/if}
+                {#if dg.lastError}<code>{t("visualizer.lastError", { error: localizeError(dg.lastError) })}</code>{/if}
                 {#if dg.poseEchoes === 0}
-                  <code>⚠ VRChat no ha enviado ninguna pose: revisa que OSC esté habilitado (Menú de acción → Opciones → OSC → Enabled) y la cámara abierta.</code>
+                  <code>{t("visualizer.noPose")}</code>
                 {/if}
               </div>
               <div>
-                <span class="diag-k">Eco de VRChat (enviado → eco):</span>
+                <span class="diag-k">{t("visualizer.echo")}</span>
                 <code>
                   {#each camParamNames as n, i}
                     {@const e = echoFor(n)}
                     {@const sent = sentFor(i)}
-                    {n.replace("iris_cam_", "")}: {sent === null ? "--" : sent.toFixed(3)} → {e ? e.value.toFixed(3) : "sin eco"}{sent !== null && Math.abs(sent) >= 0.999 ? " (saturado: >50 m del ancla)" : ""}{e && sent !== null && Math.abs(e.value - sent) > 0.02 ? " ⚠" : ""}{i < 5 ? " · " : ""}
+                    {n.replace("iris_cam_", "")}: {sent === null ? "--" : sent.toFixed(3)} → {e ? e.value.toFixed(3) : t("visualizer.noEcho")}{sent !== null && Math.abs(sent) >= 0.999 ? ` ${t("visualizer.saturated")}` : ""}{e && sent !== null && Math.abs(e.value - sent) > 0.02 ? " ⚠" : ""}{i < 5 ? " · " : ""}
                   {/each}
                 </code>
               </div>
               <div>
-                <span class="diag-k">Ajuste fino del ancla (gizmo, ejes del rig):</span>
+                <span class="diag-k">{t("visualizer.nudgeTitle")}</span>
                 <code>
                   x {visualizerSnapshot.nudgePos[0].toFixed(2)} m · y {visualizerSnapshot.nudgePos[1].toFixed(2)} m ·
-                  z {visualizerSnapshot.nudgePos[2].toFixed(2)} m · giro {visualizerSnapshot.nudgeYaw.toFixed(0)}°
+                  z {visualizerSnapshot.nudgePos[2].toFixed(2)} m · {t("visualizer.yaw")} {visualizerSnapshot.nudgeYaw.toFixed(0)}°
                 </code>
               </div>
             </div>
             <div class="avatar-sim-controls">
-              <span class="sim-label">Ajuste fino ({nudgeCoarse ? "10 cm / 10°" : "1 cm / 1°"}):</span>
+              <span class="sim-label">{t("visualizer.nudge", { step: nudgeCoarse ? "10 cm / 10°" : "1 cm / 1°" })}</span>
               <div class="sim-buttons">
                 <button type="button" class="btn-diag ghost" disabled={!visualizerSnapshot.anchorPosition} onclick={() => handleNudge(-1, 0, 0, 0)}>X −</button>
                 <button type="button" class="btn-diag ghost" disabled={!visualizerSnapshot.anchorPosition} onclick={() => handleNudge(1, 0, 0, 0)}>X +</button>
@@ -1057,34 +1063,34 @@
                 <button type="button" class="btn-diag ghost" disabled={!visualizerSnapshot.anchorPosition} onclick={() => handleNudge(0, 1, 0, 0)}>Y +</button>
                 <button type="button" class="btn-diag ghost" disabled={!visualizerSnapshot.anchorPosition} onclick={() => handleNudge(0, 0, -1, 0)}>Z −</button>
                 <button type="button" class="btn-diag ghost" disabled={!visualizerSnapshot.anchorPosition} onclick={() => handleNudge(0, 0, 1, 0)}>Z +</button>
-                <button type="button" class="btn-diag ghost" disabled={!visualizerSnapshot.anchorPosition} onclick={() => handleNudge(0, 0, 0, -1)}>Giro −</button>
-                <button type="button" class="btn-diag ghost" disabled={!visualizerSnapshot.anchorPosition} onclick={() => handleNudge(0, 0, 0, 1)}>Giro +</button>
-                <button type="button" class="btn-diag ghost" onclick={() => (nudgeCoarse = !nudgeCoarse)}>{nudgeCoarse ? "Paso fino" : "Paso grueso"}</button>
-                <button type="button" class="btn-diag ghost" disabled={!visualizerSnapshot.anchorPosition} onclick={handleResetNudge}>Restablecer ajuste</button>
+                <button type="button" class="btn-diag ghost" disabled={!visualizerSnapshot.anchorPosition} onclick={() => handleNudge(0, 0, 0, -1)}>{t("visualizer.yaw")} −</button>
+                <button type="button" class="btn-diag ghost" disabled={!visualizerSnapshot.anchorPosition} onclick={() => handleNudge(0, 0, 0, 1)}>{t("visualizer.yaw")} +</button>
+                <button type="button" class="btn-diag ghost" onclick={() => (nudgeCoarse = !nudgeCoarse)}>{t(nudgeCoarse ? "visualizer.stepFine" : "visualizer.stepCoarse")}</button>
+                <button type="button" class="btn-diag ghost" disabled={!visualizerSnapshot.anchorPosition} onclick={handleResetNudge}>{t("visualizer.resetNudge")}</button>
               </div>
             </div>
           {/if}
 
           <div class="avatar-sim-controls">
-            <span class="sim-label">Acciones Cinemáticas OSC:</span>
+            <span class="sim-label">{t("visualizer.actions")}</span>
             <div class="sim-buttons">
               <button
                 type="button"
                 class="btn-diag primary"
                 disabled={!status.connected}
                 onclick={handleVisualizerActivate}
-                title="Vuelve a mandar iris_enable = true: úsalo si recargaste el avatar y no ves el gizmo"
+                title={t("visualizer.resendTooltip")}
               >
-                {visualizerSnapshot?.enabled ? "Reenviar gizmo" : "Mostrar gizmo"}
+                {t(visualizerSnapshot?.enabled ? "visualizer.resend" : "visualizer.show")}
               </button>
               <button type="button" class="btn-diag ghost" disabled={!status.connected} onclick={handleVisualizerToggleHide}>
-                {visualizerSnapshot?.hideCam ? "Mostrar en cámaras de VRChat" : "Ocultar de cámaras de VRChat"}
+                {t(visualizerSnapshot?.hideCam ? "visualizer.showInCams" : "visualizer.hideFromCams")}
               </button>
               <button type="button" class="btn-diag ghost" onclick={handleVisualizerSyncPath}>
-                Sincronizar Path 5 Huesos (Flujo B)
+                {t("visualizer.syncPath")}
               </button>
               <button type="button" class="btn-diag ghost" onclick={handleVisualizerResetAnchor}>
-                Apagar gizmo
+                {t("visualizer.turnOff")}
               </button>
             </div>
           </div>
