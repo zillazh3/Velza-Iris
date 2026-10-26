@@ -328,68 +328,28 @@ export type FinishedRecording = {
   keyframes: Keyframe[];
 };
 
-export type AvatarIntegrationState =
-  | "idle"
-  | "configuring"
-  | "ready"
-  | "previewing"
-  | "playing"
-  | "stopped"
-  | "error";
-
-export type BoneRigSample = {
-  index: number;
-  arcFraction: number;
-  position: [number, number, number];
-  tangent: [number, number, number];
-  arrowRot: [number, number, number];
-  cameraRot: [number, number, number];
-};
-
-export type RigRepresentationStatus =
-  | "ready"
-  | { pendingVrcLimitations: string };
-
-export type AvatarPathRigSnapshot = {
-  boneCount: number;
-  totalDistanceM: number;
-  samples: BoneRigSample[];
-  status: RigRepresentationStatus;
-  cameraPoseNow: Pose | null;
-  cameraForwardNow: [number, number, number] | null;
-};
-
-export type AvatarIntegrationConfig = {
-  schemaVersion: number;
+export type VisualizerSnapshot = {
   enabled: boolean;
-  sendHost: string;
-  sendPort: number;
-  listenPort: number;
-  minDuration: number;
-  maxDuration: number;
-  boneCount: number;
-  rigScale: number;
-  coordinateSystem: string;
-  autoRearm: boolean;
-  logDiagnostics: boolean;
+  anchorPosition: [number, number, number] | null;
+  anchorYaw: number | null;
+  hideCam: boolean;
+  lastCamPose: Pose | null;
+  lastCamNormalizedPos: [number, number, number] | null;
+  lastCamNormalizedRot: [number, number, number] | null;
+  lastWpSamples: [number, number, number][] | null;
+  isSyncingPath: boolean;
+  lastError: string | null;
+  nudgePos: [number, number, number];
+  nudgeYaw: number;
+  diag: VizDiag;
 };
 
-export type AvatarIntegrationSnapshot = {
-  protocolVersion: string;
-  state: AvatarIntegrationState;
-  lastAction: number;
-  actionArmed: boolean;
-  currentAvatarId: string | null;
-  durationSeconds: number;
-  durationNormalized: number;
-  anchorMode: number;
-  pathType: number;
-  looping: boolean;
-  assetVisible: boolean;
-  hasPointA: boolean;
-  hasPointB: boolean;
+export type VizDiag = {
+  poseEchoes: number;
+  framesSent: number;
+  skipped: { disabled: number; noAnchor: number; externalControl: number; deadband: number; busy: number };
   lastError: string | null;
-  rigSnapshot: AvatarPathRigSnapshot;
+  avatarEcho: { name: string; value: number; ageMs: number }[];
 };
 
 export const api = {
@@ -452,13 +412,21 @@ export const api = {
   exportVrcDolly: (project: SequenceProject, bakeEffects: boolean) =>
     invoke<string>("export_vrc_dolly_cmd", { project, bakeEffects }),
 
-  // Avatar Asset Integration (VRCFury) & Path Trajectory
-  avatarStatus: () => invoke<AvatarIntegrationSnapshot>("avatar_status"),
-  avatarConfig: () => invoke<AvatarIntegrationConfig>("avatar_config"),
-  saveAvatarConfig: (config: AvatarIntegrationConfig) =>
-    invoke<AvatarIntegrationConfig>("save_avatar_config", { config }),
-  triggerAvatarAction: (action: number) =>
-    invoke<AvatarIntegrationSnapshot>("trigger_avatar_action", { action }),
+  // Visualizador OSC / Rig de Avatar (Avatars 3.0 / Unity)
+  visualizerStatus: () => invoke<VisualizerSnapshot>("visualizer_status"),
+  visualizerSetAnchor: (anchorPos?: [number, number, number]) =>
+    invoke<[number, number, number]>("visualizer_set_anchor", { anchorPos }),
+  visualizerActivate: () => invoke<void>("visualizer_activate"),
+  visualizerSetHideCam: (hidden: boolean) => invoke<void>("visualizer_set_hide_cam", { hidden }),
+  visualizerResetAnchor: () => invoke<void>("visualizer_reset_anchor"),
+  visualizerNudge: (dx: number, dy: number, dz: number, dyaw: number) =>
+    invoke<void>("visualizer_nudge", { dx, dy, dz, dyaw }),
+  visualizerResetNudge: () => invoke<void>("visualizer_reset_nudge"),
+  visualizerSyncPath: (project: SequenceProject) =>
+    invoke<void>("visualizer_sync_path", { project }),
+  visualizerSyncCamera: (pose: Pose) =>
+    invoke<void>("visualizer_sync_camera", { pose }),
+  avatarStatus: () => invoke<VisualizerSnapshot>("visualizer_status"),
   fitKeyframesToDuration: (project: SequenceProject, targetDuration: number) =>
     invoke<SequenceProject>("fit_keyframes_to_duration", { project, targetDuration }),
   sampleBasePoseAt: (project: SequenceProject, time: number) =>

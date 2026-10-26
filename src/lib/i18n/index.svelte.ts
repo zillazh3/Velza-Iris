@@ -100,8 +100,15 @@ export function localizeError(err: unknown): string {
   if (trimmed.includes("cámara cerrada: ábrela en VRChat") || trimmed.includes("cámara de VRChat está cerrada")) {
     return t("err.cameraClosed");
   }
+  if (trimmed.includes("Puerto de escucha UDP 9001") || trimmed.includes("Puerto UDP 9001 no disponible")) {
+    return t("err.rxUnavailable");
+  }
   if (trimmed.includes("sin ancla: calibra primero")) return t("err.noAnchor");
-  if (trimmed.includes("aún no reporta la pose") || trimmed.includes("Aún no recibimos la posición actual")) {
+  if (
+    trimmed.includes("aún no reporta la pose") ||
+    trimmed.includes("Aún no recibimos la posición actual") ||
+    trimmed.includes("aún no reporta una posición reciente")
+  ) {
     return t("err.poseStale");
   }
   if (trimmed.includes("Mueve ligeramente tu cámara en VRChat sobre el objetivo")) {
