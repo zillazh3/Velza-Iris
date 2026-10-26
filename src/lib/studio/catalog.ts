@@ -345,6 +345,7 @@ export function createDefaultSequenceProject(
     loop: false,
     space: "anchor",
     anchorSnapshot: anchor,
+    pathLock: true,
     trajectoryScale: 1,
     target: null,
     cinematic: defaultCinematicConfig(),

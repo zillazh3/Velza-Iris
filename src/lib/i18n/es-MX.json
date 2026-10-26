@@ -425,6 +425,8 @@
   "studio.spatialMode": "Modo espacial",
   "studio.rebindAnchor": "Re-vincular puntos al ancla actual",
   "studio.rebindTooltip": "Recalcula los offsets relativos de los puntos respecto a tu ancla calibrada actual",
+  "studio.pathLock": "Bloquear path en el espacio",
+  "studio.pathLockTooltip": "Activado: el path se queda fijo en el mundo al re-anclar o reabrir la cámara. Desactivado: el path sigue al ancla actual (portable).",
   "studio.targetSource.static": "Punto estático calibrado con cámara",
   "studio.targetSource.anchor": "Ancla calibrada del jugador",
   "studio.targetSource.udon": "Asset de Mundo Udon (Experimental)",

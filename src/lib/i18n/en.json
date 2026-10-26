@@ -425,6 +425,8 @@
   "studio.spatialMode": "Spatial mode",
   "studio.rebindAnchor": "Re-bind keyframes to current anchor",
   "studio.rebindTooltip": "Recalculates relative point offsets to your current calibrated anchor",
+  "studio.pathLock": "Lock path in space",
+  "studio.pathLockTooltip": "On: the path stays fixed in the world when you re-anchor or reopen the camera. Off: the path follows the current anchor (portable).",
   "studio.targetSource.static": "Static calibrated camera point",
   "studio.targetSource.anchor": "Player's calibrated anchor",
   "studio.targetSource.udon": "Udon World Asset (Experimental)",

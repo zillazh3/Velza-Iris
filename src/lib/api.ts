@@ -258,7 +258,10 @@ export type SequenceProject = {
   durationInputMode?: DurationInputMode;
   loop?: boolean;
   space: ReferenceSpace;
+  /** Path Origin: ancla con la que se grabó el path (congelada). */
   anchorSnapshot: Anchor | null;
+  /** Lock Path in Space: el path no se mueve al re-anclar ni al reabrir la cámara. Ausente = true. */
+  pathLock?: boolean;
   trajectoryScale: number;
   target: TargetConfig | null;
   cinematic?: CinematicConfig;
