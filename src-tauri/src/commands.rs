@@ -268,6 +268,10 @@ pub async fn connect(app: AppHandle, st: State<'_, App>) -> Result<(), String> {
         move |osc_msg| {
             // VRChat devuelve por 9001 los parámetros del avatar local: se guardan los iris_* como prueba de que el
             // avatar aplicó lo que le enviamos (diagnóstico en la tarjeta del visualizador).
+            if osc_msg.addr == "/avatar/change" {
+                app_avatar.state::<App>().visualizer.on_avatar_changed();
+                return;
+            }
             let value = match osc_msg.args.first() {
                 Some(OscType::Float(f)) => Some(*f),
                 Some(OscType::Int(i)) => Some(*i as f32),
@@ -334,10 +338,19 @@ pub fn calibrate(st: State<App>) -> Result<(), String> {
             c.send_raw(addr, args)
         });
 
-    // El rig NO se ancla aquí: su origen (Iris_World_Root) está en la cabeza + 0.30 m, no donde esté la cámara ahora, y
-    // anclarlo con esta pose dejaba el gizmo desplazado una distancia constante. Solo se muestra el gizmo; el ancla se
-    // confirma desde la tarjeta del visualizador, con la cámara encajada sobre él (`visualizer_set_anchor`).
+    // Un clic: se enciende el rig, que vive en el origen del mundo (no hay nada que calibrar contra la cabeza del avatar).
     let _ = st.visualizer.activate(sink);
+
+    // FLUJO C inicial: sincronizar el visualizador de cámara en ráfaga inmediata
+    let cam_arc2 = st.camera.clone();
+    let _ = st.visualizer.sync_camera_frame(&pose, &move |msgs| {
+        let guard = cam_arc2.lock().unwrap();
+        let c = guard.as_ref().ok_or("Sin conexión con VRChat")?;
+        for msg in msgs {
+            let _ = c.send_raw(msg.addr, msg.args);
+        }
+        Ok(())
+    });
 
     Ok(())
 }
@@ -1156,63 +1169,8 @@ pub fn visualizer_status(st: State<App>) -> VisualizerSnapshot {
     st.visualizer.snapshot()
 }
 
-/// Clava el Ancla del Visualizador en una posición dada o en la pose actual de la cámara (Flujo A).
-#[tauri::command]
-pub fn visualizer_set_anchor(anchor_pos: Option<[f32; 3]>, st: State<App>) -> Result<[f32; 3], String> {
-    let (anchor, pose_opt) = if let Some(p) = anchor_pos {
-        (Anchor { eye: p, yaw: 0.0 }, None)
-    } else {
-        let cam_guard = st.camera.lock().unwrap();
-        let cam = cam_guard.as_ref().ok_or("Sin conexión con VRChat")?;
-        let snap = cam.state.lock().unwrap().snapshot();
-        if !snap.rx_available {
-            return Err("Puerto de escucha UDP 9001 no disponible (¿otra app OSC abierta?). Cierra la otra app y reconecta.".into());
-        }
-        if !snap.open {
-            return Err("cámara cerrada: ábrela en VRChat".into());
-        }
-        let p = snap.pose.ok_or("VRChat aún no reporta la pose: mueve un poco la cámara")?;
-        let now_ms = snap.pose_epoch_ms.unwrap_or_else(now_epoch_ms);
-        (Anchor::from_pose(&p), Some((p, snap.pose_fresh, now_ms)))
-    };
-
-    // Si calibramos desde la pose de la cámara, sincronizamos también anchor_mgr
-    if let Some((pose, fresh, now_ms)) = pose_opt {
-        let _ = st.anchor_mgr.lock().unwrap().calibrate_manual(pose, fresh, now_ms);
-    }
-
-    let cam_arc = st.camera.clone();
-    let sink: Arc<dyn Fn(String, Vec<OscType>) -> Result<(), String> + Send + Sync> =
-        Arc::new(move |addr: String, args: Vec<OscType>| -> Result<(), String> {
-            let guard = cam_arc.lock().unwrap();
-            let c = guard.as_ref().ok_or("Sin conexión con VRChat")?;
-            c.send_raw(addr, args)
-        });
-
-    let res = st.visualizer.set_anchor(anchor, sink.clone())?.eye;
-
-    // Sincronización inicial de la cámara (Flujo C):
-    // Extraer pose liberando el lock de st.camera antes de invocar sync_camera_frame para evitar auto-deadlock
-    let initial_cam_pose = {
-        let guard = st.camera.lock().unwrap();
-        guard.as_ref().and_then(|c| c.state.lock().unwrap().pose)
-    };
-    if let Some(pose) = initial_cam_pose {
-        let cam_arc2 = st.camera.clone();
-        let _ = st.visualizer.sync_camera_frame(&pose, &move |msgs| {
-            let guard = cam_arc2.lock().unwrap();
-            let c = guard.as_ref().ok_or("Sin conexión con VRChat")?;
-            for msg in msgs {
-                let _ = c.send_raw(msg.addr, msg.args);
-            }
-            Ok(())
-        });
-    }
-
-    Ok(res)
-}
-
-/// Muestra el gizmo de la cámara en el origen del rig para encajar encima la cámara de VRChat (Flujo A, paso 1).
+/// Enciende el rig (anclado al origen del mundo) y manda de una vez la pose actual de la cámara para que el gizmo
+/// aparezca encima sin esperar a que la cámara se mueva.
 #[tauri::command]
 pub fn visualizer_activate(st: State<App>) -> Result<(), String> {
     let cam_arc = st.camera.clone();
@@ -1222,7 +1180,25 @@ pub fn visualizer_activate(st: State<App>) -> Result<(), String> {
             let c = guard.as_ref().ok_or("Sin conexión con VRChat")?;
             c.send_raw(addr, args)
         });
-    st.visualizer.activate(sink)
+    st.visualizer.activate(sink)?;
+
+    // Extraer la pose liberando el lock de `camera` antes de sincronizar (evita auto-deadlock).
+    let pose = {
+        let guard = st.camera.lock().unwrap();
+        guard.as_ref().and_then(|c| c.state.lock().unwrap().pose)
+    };
+    if let Some(pose) = pose {
+        let cam_arc = st.camera.clone();
+        let _ = st.visualizer.sync_camera_frame(&pose, &move |msgs| {
+            let guard = cam_arc.lock().unwrap();
+            let c = guard.as_ref().ok_or("Sin conexión con VRChat")?;
+            for msg in msgs {
+                let _ = c.send_raw(msg.addr, msg.args);
+            }
+            Ok(())
+        });
+    }
+    Ok(())
 }
 
 /// Oculta/muestra el gizmo de cámara y el path en las cámaras de VRChat (`iris_hide_cam`, synced).
