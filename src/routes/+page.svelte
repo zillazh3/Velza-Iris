@@ -20,6 +20,7 @@
     Orbit,
     PersonStanding,
     Radio,
+    ScrollText,
     RotateCcw,
     Settings,
     Sparkles,
@@ -39,13 +40,14 @@
   import { api, type Preset, type SequenceProject, type Status, type VisualizerSnapshot } from "$lib/api";
   import { i18n, t, pointLabel, localizeError, localizePresetName, type Key } from "$lib/i18n/index.svelte";
   import { createDefaultSequenceProject } from "$lib/studio/catalog";
+  import LogsView from "$lib/LogsView.svelte";
   import MotionPanel from "$lib/MotionPanel.svelte";
   import StudioWorkspace from "$lib/studio/StudioWorkspace.svelte";
   import IrisSelect, { type SelectOption } from "$lib/components/ui/IrisSelect.svelte";
   import KeybindingsModal from "$lib/components/ui/KeybindingsModal.svelte";
   import { themeManager, ACCENT_PRESETS, type ThemeMode, type AccentPreset } from "$lib/theme/theme.svelte";
 
-  type MainView = "home" | "framings" | "studio" | "library" | "community" | "settings";
+  type MainView = "home" | "framings" | "studio" | "library" | "community" | "logs" | "settings";
   type Category = Preset["category"];
 
   let activeView = $state<MainView>("studio");
@@ -162,6 +164,7 @@
     { id: "studio", key: "nav.studio", icon: Film },
     { id: "library", key: "nav.library", icon: BookOpen },
     { id: "community", key: "nav.community", icon: Globe },
+    { id: "logs", key: "nav.logs", icon: ScrollText },
     { id: "settings", key: "nav.settings", icon: Settings },
   ];
 
@@ -818,6 +821,9 @@
     <!-- =====================================================================
          VISTA 6: AJUSTES Y DIAGNÓSTICO OSC
          ===================================================================== -->
+    {:else if activeView === "logs"}
+      <LogsView />
+
     {:else if activeView === "settings"}
       <div class="settings-stack">
         <!-- APARIENCIA, TEMA Y SELECTOR PRÉMIUM -->

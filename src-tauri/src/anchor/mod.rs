@@ -358,6 +358,8 @@ impl AnchorManager {
     fn transition_to(&mut self, next: AnchorLifecycleState, timestamp_ms: u64, reason: impl Into<String>) {
         let from = self.state;
         self.state = next;
+        let reason: String = reason.into();
+        crate::logbus::engine("engine/anchor", format!("{from:?} → {next:?}: {reason}"));
         if self.audit_log.len() >= MAX_AUDIT_LOG_ENTRIES {
             self.audit_log.remove(0);
         }
@@ -367,7 +369,7 @@ impl AnchorManager {
             to_state: next,
             camera_mode: self.camera_mode,
             provenance: self.provenance,
-            reason: reason.into(),
+            reason,
         });
     }
 
