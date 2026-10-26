@@ -375,8 +375,8 @@
   }
 
   .kbd-btn.modified kbd {
-    border-color: var(--text-2));
-    color: var(--text-2));
+    border-color: var(--text-2);
+    color: var(--text-2);
   }
 
   .recording-badge {

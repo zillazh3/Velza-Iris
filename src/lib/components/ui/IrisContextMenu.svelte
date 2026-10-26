@@ -199,7 +199,7 @@
   .ctx-icon {
     display: inline-flex;
     align-items: center;
-    color: var(--text-2));
+    color: var(--text-2);
     flex-shrink: 0;
   }
 

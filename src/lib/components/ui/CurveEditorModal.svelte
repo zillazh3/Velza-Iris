@@ -480,7 +480,7 @@
 
   .presets-title {
     font-size: 0.74rem;
-    color: var(--text-2));
+    color: var(--text-2);
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.04em;

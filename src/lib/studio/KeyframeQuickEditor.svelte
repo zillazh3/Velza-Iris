@@ -343,7 +343,7 @@
     font-size: 0.68rem;
     border-radius: 999px;
     background: rgba(var(--accent-color-rgb), 0.15);
-    color: var(--text-2));
+    color: var(--text-2);
     border: 1px solid rgba(var(--accent-color-rgb), 0.25);
     cursor: pointer;
   }
