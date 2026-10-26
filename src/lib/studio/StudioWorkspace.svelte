@@ -565,6 +565,7 @@
     void activeProject.keyframes.length;
     void activeProject.effects.length;
     void activeProject.space;
+    void activeProject.pathLock;
     void activeProject.trajectoryScale;
     // `syncActiveProjectToLibrary` lee y escribe `sequences`: sin `untrack` este effect se re-dispara a sí mismo en bucle.
     untrack(() => syncActiveProjectToLibrary(activeProject));
@@ -584,8 +585,10 @@
       activeProject.id,
       activeProject.duration,
       activeProject.space,
+      activeProject.pathLock !== false,
       activeProject.trajectoryScale,
-      status.anchor ? `${status.anchor.eye.join(",")}@${status.anchor.yaw}` : "",
+      // Con el path bloqueado el ancla viva no lo mueve: no hay nada que resincronizar cuando cambia.
+      activeProject.pathLock === false && status.anchor ? `${status.anchor.eye.join(",")}@${status.anchor.yaw}` : "",
       ...activeProject.keyframes.map(
         (k) => `${k.time}|${k.rawPose.pos.join(",")}|${k.localPose?.pos?.join(",") ?? ""}|${k.transition}|${k.knotMode}`,
       ),
@@ -3194,6 +3197,18 @@
                 onchange={() => refreshMathPreview(false)}
               />
             </label>
+
+            <div title={t("studio.pathLockTooltip")}>
+              <IrisCheckbox
+                variant="switch"
+                checked={activeProject.pathLock !== false}
+                onchange={(checked) => {
+                  activeProject.pathLock = checked;
+                  refreshMathPreview(false);
+                }}
+                label={t("studio.pathLock")}
+              />
+            </div>
 
             <label>
               <span>{t("studio.trajectoryScale", { scale: activeProject.trajectoryScale.toFixed(2) })}</span>
