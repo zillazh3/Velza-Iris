@@ -231,6 +231,9 @@ pub struct AnchorManager {
     last_pose_seq: u64,
     last_observed_pose: Option<(u64, Pose)>,
     locked_to_operator: bool,
+    /// Ancla calibrada explícitamente que sobrevive al cierre confirmado de la cámara: reabrirla la restaura sin
+    /// re-adquirir (el World Constraint de Unity sigue fijo). Solo `release()` la olvida.
+    retained: Option<Anchor>,
     look_at_me_active: Option<bool>,
     look_at_me_offsets: [f32; 2],
     sync_loss_cause: Option<SyncLossCause>,
@@ -266,6 +269,7 @@ impl AnchorManager {
             last_pose_seq: 0,
             last_observed_pose: None,
             locked_to_operator: false,
+            retained: None,
             look_at_me_active: None,
             look_at_me_offsets: [0.0, 0.0],
             sync_loss_cause: None,
@@ -381,6 +385,9 @@ impl AnchorManager {
             && now_ms.saturating_sub(zero_since) > MODE_SWITCH_GRACE_MS
         {
             let release_ms = zero_since + MODE_SWITCH_GRACE_MS;
+            if self.provenance == Some(AnchorProvenance::OperatorCalibrated) {
+                self.retained = self.anchor;
+            }
             self.anchor = None;
             self.provenance = None;
             self.locked_to_operator = false;
@@ -403,6 +410,21 @@ impl AnchorManager {
                 "Tiempo de espera de sincronización OSC excedido; ancla conservada en memoria",
             );
         }
+    }
+
+    /// Reapertura de cámara con un ancla calibrada retenida: vuelve a `Active` con ella, sin tomar la pose de apertura.
+    fn try_restore_retained(&mut self, timestamp_ms: u64) -> bool {
+        let Some(a) = self.retained else { return false };
+        self.anchor = Some(a);
+        self.provenance = Some(AnchorProvenance::OperatorCalibrated);
+        self.locked_to_operator = true;
+        self.last_verified_ms = Some(timestamp_ms);
+        self.transition_to(
+            AnchorLifecycleState::Active,
+            timestamp_ms,
+            "Cámara reabierta: ancla calibrada conservada, sin recalibrar",
+        );
+        true
     }
 
     /// Procesa un cambio o eco de `/usercamera/Mode` (`0..=6`).
@@ -470,6 +492,7 @@ impl AnchorManager {
                     timestamp_ms,
                     format!("Transición a cámara activa (Mode {mode}); iniciando adquisición del operador local"),
                 );
+                self.try_restore_retained(timestamp_ms);
             }
             AnchorLifecycleState::Acquiring => {
                 if self.camera_mode != mode {
@@ -616,7 +639,9 @@ impl AnchorManager {
                     timestamp_ms,
                     "Recepción de Pose con cámara activa; iniciando adquisición",
                 );
-                if !is_echo && !self.external_control_active {
+                if self.try_restore_retained(timestamp_ms) {
+                    // ancla calibrada conservada: la pose de apertura no la sobrescribe
+                } else if !is_echo && !self.external_control_active {
                     self.anchor = Some(Anchor::from_pose(&pose));
                     self.provenance = Some(AnchorProvenance::AutoOnActivation);
                     self.locked_to_operator = true;
@@ -789,6 +814,7 @@ impl AnchorManager {
     pub fn release(&mut self, timestamp_ms: u64, reason: impl Into<String>) {
         self.last_event_ms = timestamp_ms.max(self.last_event_ms);
         self.anchor = None;
+        self.retained = None;
         self.provenance = None;
         self.locked_to_operator = false;
         self.mode_zero_since_ms = None;
@@ -910,6 +936,49 @@ mod tests {
         mgr.check_timeouts(5000 + MODE_SWITCH_GRACE_MS + 10);
         assert_eq!(mgr.state(), AnchorLifecycleState::Released);
         assert_eq!(mgr.active_anchor(), None);
+    }
+
+    #[test]
+    fn calibrated_anchor_survives_confirmed_close_and_reopen_elsewhere() {
+        let mut mgr = AnchorManager::new();
+        mgr.on_mode(1, 1000);
+        mgr.on_pose(Pose { pos: [0.0, 1.6, 0.0], rot: [0.0, 0.0, 0.0] }, 1, 1020);
+        let face = Pose { pos: [3.0, 1.65, -2.0], rot: [0.0, 90.0, 0.0] };
+        let calibrated = mgr.calibrate_manual(face, true, 1500).unwrap();
+
+        mgr.on_mode(0, 5000);
+        mgr.check_timeouts(5000 + MODE_SWITCH_GRACE_MS + 10);
+        assert_eq!(mgr.state(), AnchorLifecycleState::Released);
+        assert_eq!(mgr.active_anchor(), None);
+
+        // La cámara se reabre lejos de donde se calibró: la pose de apertura NO se toma como ancla.
+        mgr.on_mode(2, 20_000);
+        assert_eq!(mgr.state(), AnchorLifecycleState::Active);
+        mgr.on_pose(Pose { pos: [40.0, 1.2, 9.0], rot: [0.0, 10.0, 0.0] }, 5, 20_050);
+        assert_eq!(mgr.active_anchor(), Some(calibrated));
+        assert_eq!(mgr.snapshot().provenance, Some(AnchorProvenance::OperatorCalibrated));
+
+        // Liberar explícitamente sí la olvida: la siguiente apertura vuelve a adquirir.
+        mgr.release(30_000, "liberación explícita");
+        mgr.on_mode(1, 31_000);
+        assert_eq!(mgr.state(), AnchorLifecycleState::Acquiring);
+        assert_eq!(mgr.active_anchor(), None);
+    }
+
+    /// Para un ancla solo-yaw, restar yaw en Euler (Unity compone ZXY, Y externa) es exactamente `Q_yaw⁻¹ ⊗ Q_world`:
+    /// el forward local es el forward de mundo rotado -yaw sobre Y, con pitch y roll intactos.
+    #[test]
+    fn world_to_local_rotation_equals_inverse_yaw_quaternion() {
+        use crate::studio::math3d::forward_dir;
+        let a = Anchor { eye: [4.0, 1.6, -3.0], yaw: 63.0 };
+        let world = Pose { pos: [1.0, 2.0, 3.0], rot: [-17.0, 141.0, 9.0] };
+        let local = a.world_to_local(&world);
+        let (s, c) = a.yaw.to_radians().sin_cos();
+        let [fx, fy, fz] = forward_dir(world.rot);
+        let expected = [fx * c - fz * s, fy, fx * s + fz * c];
+        let got = forward_dir(local.rot);
+        assert!(expected.iter().zip(got).all(|(e, g)| (e - g).abs() < 1e-4), "{expected:?} != {got:?}");
+        assert!((local.rot[0] - world.rot[0]).abs() < 1e-4 && (local.rot[2] - world.rot[2]).abs() < 1e-4);
     }
 
     #[test]

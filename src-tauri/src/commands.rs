@@ -317,7 +317,10 @@ pub fn status(st: State<App>) -> Status {
     }
 }
 
-/// Toma la pose actual de la cámara (cerca de la cara, mirando al frente) como origen de los presets y clava el Ancla del Visualizador.
+/// Attach_Camera_To_Rig (Camera Pickup): toma la pose actual de la cámara (cerca de la cara, mirando al frente) como
+/// ancla del operador, origen de los presets. NO toca el Path Origin de ningún proyecto (`anchor_snapshot`, ver
+/// `SequenceProject::bind_anchor`) ni mueve el rig (Rig Base: World Constraint al origen del mundo, `visualizer_activate`);
+/// solo lo enciende si estaba apagado.
 #[tauri::command]
 pub fn calibrate(st: State<App>) -> Result<(), String> {
     let r = calibrate_inner(&st);
@@ -349,17 +352,18 @@ fn calibrate_inner(st: &State<App>) -> Result<(), String> {
         .unwrap()
         .calibrate_manual(pose, snap.pose_fresh, now_ms)?;
 
-    // FLUJO A: Calibración del Sistema "Ancla" del visualizador
-    let cam_arc = st.camera.clone();
-    let sink: Arc<dyn Fn(String, Vec<OscType>) -> Result<(), String> + Send + Sync> =
-        Arc::new(move |addr: String, args: Vec<OscType>| -> Result<(), String> {
-            let guard = cam_arc.lock().unwrap();
-            let c = guard.as_ref().ok_or("Sin conexión con VRChat")?;
-            c.send_raw(addr, args)
-        });
-
-    // Un clic: se enciende el rig, que vive en el origen del mundo (no hay nada que calibrar contra la cabeza del avatar).
-    let _ = st.visualizer.activate(sink);
+    // Un clic: si el rig estaba apagado se enciende (vive en el origen del mundo). Con el rig ya encendido no se re-activa:
+    // `activate` pone la cámara del gizmo en 0, el yaw en 0 y reenvía path y modo.
+    if !st.visualizer.enabled.load(Ordering::Relaxed) {
+        let cam_arc = st.camera.clone();
+        let sink: Arc<dyn Fn(String, Vec<OscType>) -> Result<(), String> + Send + Sync> =
+            Arc::new(move |addr: String, args: Vec<OscType>| -> Result<(), String> {
+                let guard = cam_arc.lock().unwrap();
+                let c = guard.as_ref().ok_or("Sin conexión con VRChat")?;
+                c.send_raw(addr, args)
+            });
+        let _ = st.visualizer.activate(sink);
+    }
 
     // FLUJO C inicial: sincronizar el visualizador de cámara en ráfaga inmediata
     let cam_arc2 = st.camera.clone();
@@ -1096,10 +1100,17 @@ pub fn list_sequences(st: State<App>) -> SequenceLibrary {
 
 #[tauri::command]
 pub fn save_sequence_cmd(mut project: SequenceProject, st: State<App>) -> Result<SequenceProject, String> {
-    if let Some(anchor) = st.current_anchor()
-        && project.anchor_snapshot.is_none()
+    // Path Origin: se fija una sola vez; después los `local_pose` se normalizan contra él (captura y grabación los
+    // calculan contra el ancla viva, que puede ser otra).
+    if project.anchor_snapshot.is_none()
+        && let Some(anchor) = st.current_anchor()
     {
-        project.bind_anchor(anchor);
+        project.anchor_snapshot = Some(anchor);
+    }
+    if project.path_lock
+        && let Some(origin) = project.anchor_snapshot
+    {
+        project.bind_anchor(origin);
     }
     project.sort_keyframes();
     let dir = st.data.as_ref().map_err(|e| e.clone())?.join("sequences");

@@ -436,8 +436,13 @@ pub struct SequenceProject {
     pub loop_playback: bool,
     #[serde(default)]
     pub space: ReferenceSpace,
+    /// Path Origin: ancla con la que se grabó el path. Congelada; solo cambia con `bind_anchor` (Set_Path_Origin).
     #[serde(default)]
     pub anchor_snapshot: Option<Anchor>,
+    /// "Lock Path in Space": `raw_pose` (mundo) es inmutable y el ancla viva no mueve el path al re-anclar o reabrir la
+    /// cámara. Desactivado = modo portable, el path se re-proyecta sobre el ancla viva (Origin Shift Compensation).
+    #[serde(default = "default_true")]
+    pub path_lock: bool,
     #[serde(default = "default_one")]
     pub trajectory_scale: f32,
     #[serde(default)]
@@ -477,6 +482,7 @@ impl SequenceProject {
             loop_playback: false,
             space: ReferenceSpace::Anchor,
             anchor_snapshot: None,
+            path_lock: true,
             trajectory_scale: 1.0,
             cinematic: CinematicConfig::default(),
             calibration: CalibrationConfig::default(),
@@ -554,6 +560,7 @@ impl SequenceProject {
             loop_playback: false,
             space: ReferenceSpace::Anchor,
             anchor_snapshot: Some(eff_anchor),
+            path_lock: true,
             trajectory_scale: 1.0,
             cinematic: CinematicConfig::for_profile(if motion.handheld {
                 CinematicProfile::Organic
@@ -670,7 +677,29 @@ impl SequenceProject {
         let _ = self.apply_duration_change(new_dur, strategy);
     }
 
-    /// Re-vincula las poses locales respecto a un ancla dada para hacer portable la secuencia.
+    /// Pose de mundo de un keyframe: único punto de resolución de espacios (evaluador, visor, export, visualizer).
+    /// Con `path_lock` la pose cruda de mundo manda y el ancla viva `live` no interviene; la escala se aplica
+    /// respecto al Path Origin (`anchor_snapshot`).
+    pub fn world_pose_of(&self, kf: &Keyframe, live: Option<&Anchor>) -> Pose {
+        let origin = self.anchor_snapshot.as_ref();
+        if self.path_lock && self.space == ReferenceSpace::Anchor {
+            return match origin {
+                Some(o) if (self.trajectory_scale - 1.0).abs() > 1e-6 => {
+                    o.local_to_world(&o.world_to_local(&kf.raw_pose), self.trajectory_scale)
+                }
+                _ => kf.raw_pose,
+            };
+        }
+        kf.world_pose(self.space, live, origin, self.trajectory_scale)
+    }
+
+    /// Ancla de la que cuelgan los efectos del path (pivote de Orbit/DollyZoom): la congelada si hay `path_lock`.
+    pub fn path_anchor<'a>(&'a self, live: Option<&'a Anchor>) -> Option<&'a Anchor> {
+        let origin = self.anchor_snapshot.as_ref();
+        if self.path_lock { origin.or(live) } else { live.or(origin) }
+    }
+
+    /// Set_Path_Origin: re-vincula las poses locales respecto a un ancla dada (el path en mundo no se mueve).
     pub fn bind_anchor(&mut self, anchor: Anchor) {
         self.anchor_snapshot = Some(anchor);
         for kf in &mut self.keyframes {
@@ -756,6 +785,25 @@ mod tests {
         assert_eq!(json["loop"], true);
         let back: SequenceProject = serde_json::from_value(json).unwrap();
         assert!(back.loop_playback);
+    }
+
+    #[test]
+    fn path_lock_defaults_true_for_old_projects_and_scales_about_the_path_origin() {
+        let mut v = serde_json::to_value(SequenceProject::new("p", "P", 10.0)).unwrap();
+        v.as_object_mut().unwrap().remove("pathLock");
+        let old: SequenceProject = serde_json::from_value(v).unwrap();
+        assert!(old.path_lock, "los proyectos guardados antes quedan bloqueados (path inmutable)");
+
+        let mut p = SequenceProject::new("p", "P", 10.0);
+        p.keyframes.push(sample_kf("A", 0.0, 3.0)); // raw [3, 1.6, 2]
+        p.bind_anchor(Anchor { eye: [1.0, 1.6, 1.0], yaw: 0.0 });
+        let live = Anchor { eye: [50.0, 1.6, 50.0], yaw: 90.0 };
+        assert_eq!(p.world_pose_of(&p.keyframes[0], Some(&live)).pos, [3.0, 1.6, 2.0]);
+
+        p.trajectory_scale = 2.0;
+        let w = p.world_pose_of(&p.keyframes[0], Some(&live)).pos;
+        // El offset (2, 0, 1) respecto al Path Origin se duplica; el ancla viva sigue sin intervenir.
+        assert!((w[0] - 5.0).abs() < 1e-4 && (w[1] - 1.6).abs() < 1e-4 && (w[2] - 3.0).abs() < 1e-4, "{w:?}");
     }
 
     fn sample_kf(id: &str, time: f32, x: f32) -> Keyframe {

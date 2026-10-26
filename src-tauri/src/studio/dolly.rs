@@ -228,7 +228,7 @@ pub fn export_vrc_dolly_json(
         sorted.sort_by(|a, b| a.time.partial_cmp(&b.time).unwrap_or(std::cmp::Ordering::Equal));
         let mut prev_t = sorted[0].time;
         for (i, kf) in sorted.iter().enumerate() {
-            let pose = kf.world_pose(project.space, active_anchor, project.anchor_snapshot.as_ref(), project.trajectory_scale);
+            let pose = project.world_pose_of(kf, active_anchor);
             let dt = if i == 0 { 0.0 } else { (kf.time - prev_t).max(0.1) };
             prev_t = kf.time;
             out_points.push(VrcDollyPoint {

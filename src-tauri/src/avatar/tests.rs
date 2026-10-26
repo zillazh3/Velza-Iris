@@ -376,6 +376,16 @@ fn test_09_two_keyframes_spread_the_points_along_the_segment_and_blank_collapses
     assert!(pts.iter().all(|(_, p)| p.pos == anchor), "un proyecto vacío no dibuja un recorrido inventado");
 }
 
+#[test]
+fn test_09b_path_lock_keeps_control_points_when_the_operator_anchor_changes() {
+    let kfs = [(0.0, [0.0, 1.0, 0.0]), (1.5, [10.0, 1.0, 5.0]), (4.0, [20.0, 3.0, -5.0])];
+    let mut p = project_with(&kfs, 4.0);
+    p.bind_anchor(Anchor { eye: [1.0, 1.6, 1.0], yaw: 30.0 });
+    let moved = Anchor { eye: [-40.0, 1.7, 22.0], yaw: -120.0 };
+    let (a, b) = (net::sample_control_points(&p, None, [0.0; 3]), net::sample_control_points(&p, Some(&moved), [0.0; 3]));
+    assert!(a.iter().zip(&b).all(|(x, y)| x.1.pos == y.1.pos), "re-anclar no debe mover los puntos del path");
+}
+
 fn straight_path() -> NetPath {
     let mut s = [(0.0, Pose { pos: [0.0; 3], rot: [0.0; 3] }); NET_POINTS];
     for (i, e) in s.iter_mut().enumerate() {
