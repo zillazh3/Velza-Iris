@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: "📖 Guía de usuario / User guide"
+    url: https://github.com/zillazh3/Velza-Iris/blob/main/docs/user_guide.es.md
+    about: "Solución de problemas comunes / Common troubleshooting (EN: docs/user_guide.en.md)"
+  - name: "🔒 Reportar una vulnerabilidad / Report a vulnerability"
+    url: https://github.com/zillazh3/Velza-Iris/security/advisories/new
+    about: "Reporte privado; no abras un issue público / Private report; don't open a public issue"

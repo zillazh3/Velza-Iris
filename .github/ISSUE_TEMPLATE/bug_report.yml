@@ -1,0 +1,54 @@
+name: "🐛 Reporte de bug / Bug report"
+description: "Algo no funciona como debería / Something isn't working"
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Gracias por reportar. Puedes escribir en español o en inglés. / Thanks for reporting. You can write in English or Spanish.
+        **No pegues datos personales.** Los logs pueden incluir nombres de parámetros de tu avatar: revísalos antes. / Logs may include avatar parameter names: review them first.
+  - type: input
+    id: version
+    attributes:
+      label: "Versión de Velza Iris / Velza Iris version"
+      placeholder: "0.1.0"
+    validations:
+      required: true
+  - type: input
+    id: windows
+    attributes:
+      label: "Versión de Windows / Windows version"
+      placeholder: "Windows 11 23H2"
+    validations:
+      required: true
+  - type: checkboxes
+    id: state
+    attributes:
+      label: "Estado de VRChat / VRChat state"
+      options:
+        - label: "VRChat abierto con OSC habilitado / VRChat running with OSC enabled"
+        - label: "Cámara de VRChat abierta / VRChat camera open"
+        - label: "Ancla calibrada / Anchor calibrated"
+  - type: textarea
+    id: what
+    attributes:
+      label: "¿Qué pasó? / What happened?"
+      description: "Incluye el mensaje de error exacto si lo hay. / Include the exact error message, if any."
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: "Pasos para reproducirlo / Steps to reproduce"
+      placeholder: "1. ...\n2. ...\n3. ..."
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: "¿Qué esperabas que pasara? / What did you expect?"
+  - type: textarea
+    id: extra
+    attributes:
+      label: "Capturas o logs (opcional) / Screenshots or logs (optional)"
+      description: "Vista Logs → Copiar. Revisa que no incluya datos personales. / Logs view → Copy. Make sure it has no personal data."
