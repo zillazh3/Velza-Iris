@@ -1155,9 +1155,9 @@
     align-items: center;
     gap: 10px;
     margin: 0 6px;
-    font-family: "Fraunces Variable", Georgia, serif;
-    font-weight: 500;
-    font-size: 1.3rem;
+    font-weight: 700;
+    font-size: 1.2rem;
+    letter-spacing: -0.01em;
     color: var(--lavender);
   }
   .brand-version {
