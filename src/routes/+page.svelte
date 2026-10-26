@@ -38,7 +38,7 @@
     FolderOpen,
     FileCode,
   } from "@lucide/svelte";
-  import { api, type Preset, type SequenceProject, type Status, type AvatarIntegrationSnapshot } from "$lib/api";
+  import { api, type Preset, type SequenceProject, type Status, type VisualizerSnapshot } from "$lib/api";
   import { i18n, t, pointLabel, localizeError, localizePresetName, type Key } from "$lib/i18n/index.svelte";
   import { createDefaultSequenceProject } from "$lib/studio/catalog";
   import MotionPanel from "$lib/MotionPanel.svelte";
@@ -63,11 +63,11 @@
   let activeProject = $state<SequenceProject>(createDefaultSequenceProject("Arco Heroico Cinematográfico"));
 
   let message = $state<{ text: string; ok: boolean } | null>(null);
-  let avatarSnapshot = $state<AvatarIntegrationSnapshot | null>(null);
+  let visualizerSnapshot = $state<VisualizerSnapshot | null>(null);
 
-  async function pollAvatarStatus() {
+  async function pollVisualizerStatus() {
     try {
-      avatarSnapshot = await api.avatarStatus();
+      visualizerSnapshot = await api.visualizerStatus();
     } catch {
       /* inicializando */
     }
@@ -75,16 +75,88 @@
 
   $effect(() => {
     if (activeView === "settings") {
-      void pollAvatarStatus();
-      const interval = setInterval(pollAvatarStatus, 1000);
+      void pollVisualizerStatus();
+      const interval = setInterval(pollVisualizerStatus, 1000);
       return () => clearInterval(interval);
     }
   });
 
-  async function handleSimulateAvatarAction(action: number) {
+  async function handleVisualizerActivate() {
     try {
-      avatarSnapshot = await api.triggerAvatarAction(action);
-      message = { text: t("settings.avatarActionTriggered"), ok: true };
+      await api.visualizerActivate();
+      await pollVisualizerStatus();
+      message = { text: "Gizmo mostrado en el origen del rig: encaja encima la cámara de VRChat y confirma el ancla", ok: true };
+    } catch (e: any) {
+      message = { text: String(e), ok: false };
+    }
+  }
+
+  // Ajuste fino del ancla: fino = 1 cm / 1°, grueso = 10 cm / 10°.
+  let nudgeCoarse = $state(false);
+  async function handleNudge(dx: number, dy: number, dz: number, dyaw: number) {
+    const k = nudgeCoarse ? 10 : 1;
+    try {
+      await api.visualizerNudge(dx * 0.01 * k, dy * 0.01 * k, dz * 0.01 * k, dyaw * k);
+      await pollVisualizerStatus();
+    } catch (e: any) {
+      message = { text: String(e), ok: false };
+    }
+  }
+
+  async function handleResetNudge() {
+    try {
+      await api.visualizerResetNudge();
+      await pollVisualizerStatus();
+    } catch (e: any) {
+      message = { text: String(e), ok: false };
+    }
+  }
+
+  /** Eco que VRChat devolvió de un parámetro iris_* frente a lo último que enviamos (misma escala normalizada). */
+  function echoFor(name: string) {
+    return visualizerSnapshot?.diag.avatarEcho.find((e) => e.name === name) ?? null;
+  }
+  const camParamNames = ["iris_cam_x", "iris_cam_y", "iris_cam_z", "iris_cam_rx", "iris_cam_ry", "iris_cam_rz"];
+  function sentFor(i: number): number | null {
+    const v = i < 3 ? visualizerSnapshot?.lastCamNormalizedPos : visualizerSnapshot?.lastCamNormalizedRot;
+    return v ? v[i % 3] : null;
+  }
+
+  async function handleVisualizerToggleHide() {
+    try {
+      await api.visualizerSetHideCam(!visualizerSnapshot?.hideCam);
+      await pollVisualizerStatus();
+    } catch (e: any) {
+      message = { text: String(e), ok: false };
+    }
+  }
+
+  async function handleVisualizerSetAnchor() {
+    try {
+      await api.visualizerSetAnchor();
+      await api.visualizerSyncPath(activeProject);
+      await pollVisualizerStatus();
+      message = { text: "Ancla del Visualizador confirmada (posición + yaw de la cámara) y Path sincronizado", ok: true };
+    } catch (e: any) {
+      message = { text: String(e), ok: false };
+    }
+  }
+
+  async function handleVisualizerResetAnchor() {
+    try {
+      await api.visualizerResetAnchor();
+      await pollVisualizerStatus();
+      message = { text: "Ancla del Visualizador reseteada", ok: true };
+    } catch (e: any) {
+      message = { text: String(e), ok: false };
+    }
+  }
+
+  async function handleVisualizerSyncPath() {
+    try {
+      await api.visualizerSyncPath(activeProject);
+      await pollVisualizerStatus();
+      message = { text: "Sincronización del Path de 5 huesos encolada (Flujo B)", ok: true };
     } catch (e: any) {
       message = { text: String(e), ok: false };
     }
@@ -279,7 +351,7 @@
       const lib = await api.listSequences();
       sequences = lib.sequences;
       if (activeProject.id === id && sequences.length > 0) {
-        activeProject = structuredClone(sequences[0]);
+        activeProject = structuredClone(lib.sequences[0]);
       }
     }, t("toast.sequenceDeleted"));
   }
@@ -427,7 +499,15 @@
           class="primary sm"
           disabled={!status.connected || !status.open}
           title={t("calibrate.help")}
-          onclick={() => run(() => api.calibrate().then(tick), t("calibrate.done"))}
+          onclick={() =>
+            run(
+              () =>
+                api
+                  .calibrate()
+                  .then(() => api.visualizerSyncPath(activeProject).catch(() => {}))
+                  .then(tick),
+              t("calibrate.done"),
+            )}
         >
           <Crosshair size={15} /> {t("calibrate.button")}
         </button>
@@ -445,6 +525,8 @@
 
     {#if !status.connected}
       <p class="banner">{t("banner.disconnected")}</p>
+    {:else if status.camera && status.camera.rxAvailable === false}
+      <p class="banner">{t("banner.rxUnavailable")}</p>
     {:else if !status.open}
       <p class="banner">{t("banner.closed")}</p>
     {/if}
@@ -604,7 +686,7 @@
                   type="button"
                   class="primary sm"
                   onclick={() => {
-                    activeProject = structuredClone(seq);
+                    activeProject = $state.snapshot(seq) as SequenceProject;
                     activeView = "studio";
                   }}
                 >
@@ -888,75 +970,134 @@
         <section class="card avatar-card">
           <div class="card-head-avatar">
             <div>
-              <h3>{t("settings.avatarIntegrationTitle")}</h3>
-              <p class="sub">{t("settings.avatarIntegrationDesc")}</p>
+              <h3>Visualizador VRChat (Avatars 3.0 / Unity)</h3>
+              <p class="sub">Rig de visualización de cámara y deformación de trayectoria de 5 huesos por OSC. «Calibrar ancla» solo muestra el gizmo: encaja la cámara de VRChat encima y pulsa «Confirmar ancla» aquí. Tras confirmar, quédate quieto para que los demás jugadores lo vean en el mismo sitio.</p>
             </div>
-            <span class="avatar-state-badge {avatarSnapshot?.state ?? 'idle'}">
-              {avatarSnapshot ? t(`avatar.state.${avatarSnapshot.state}`) : t("avatar.state.idle")}
+            <span class="avatar-state-badge {visualizerSnapshot?.enabled ? 'ready' : 'idle'}">
+              {visualizerSnapshot?.enabled ? "iris_enable = true" : "iris_enable = false"}
             </span>
           </div>
 
           <div class="diag-grid">
             <div>
-              <span class="diag-k">{t("settings.avatarDetected")}</span>
-              <code>{avatarSnapshot?.currentAvatarId ?? t("settings.avatarNone")}</code>
-            </div>
-            <div>
-              <span class="diag-k">{t("settings.avatarLastAction")}</span>
+              <span class="diag-k">Ancla Visualizador (Mundo):</span>
               <code>
-                {avatarSnapshot ? `Iris_Action = ${avatarSnapshot.lastAction}` : "0"}
-                <span class="action-pill {avatarSnapshot?.actionArmed ? 'armed' : 'rearming'}">
-                  {avatarSnapshot?.actionArmed ? t("settings.avatarArmed") : t("settings.avatarRearming")}
-                </span>
-              </code>
-            </div>
-            <div>
-              <span class="diag-k">{t("studio.duration")}:</span>
-              <code>
-                {avatarSnapshot?.durationSeconds.toFixed(1) ?? "10.0"}s ({((avatarSnapshot?.durationNormalized ?? 0.5) * 100).toFixed(0)}%)
-              </code>
-            </div>
-            <div>
-              <span class="diag-k">{t("settings.avatarRigStatus")}</span>
-              <code class="rig-status-code">
-                {#if typeof avatarSnapshot?.rigSnapshot.status === "object" && "pendingVrcLimitations" in avatarSnapshot.rigSnapshot.status}
-                  {avatarSnapshot.rigSnapshot.status.pendingVrcLimitations}
+                {#if visualizerSnapshot?.anchorPosition}
+                  [{visualizerSnapshot.anchorPosition[0].toFixed(2)}, {visualizerSnapshot.anchorPosition[1].toFixed(2)}, {visualizerSnapshot.anchorPosition[2].toFixed(2)}]m
+                  @ {visualizerSnapshot.anchorYaw?.toFixed(1) ?? "0.0"}° yaw
+                {:else if visualizerSnapshot?.enabled}
+                  Gizmo en el origen: encaja la cámara de VRChat y confirma
                 {:else}
-                  OK
+                  Sin anclar (sigue cabeza)
                 {/if}
               </code>
             </div>
             <div>
-              <span class="diag-k">{t("settings.avatarRigSegments")}</span>
+              <span class="diag-k">Cámara OSC Normalizada (cam_x/y/z):</span>
               <code>
-                {avatarSnapshot?.rigSnapshot.boneCount ?? 16} {t("settings.avatarRigSegments").toLowerCase()} {avatarSnapshot?.rigSnapshot.totalDistanceM.toFixed(2) ?? "0.00"}m
+                {#if visualizerSnapshot?.lastCamNormalizedPos}
+                  [{visualizerSnapshot.lastCamNormalizedPos[0].toFixed(3)}, {visualizerSnapshot.lastCamNormalizedPos[1].toFixed(3)}, {visualizerSnapshot.lastCamNormalizedPos[2].toFixed(3)}]
+                {:else}
+                  --
+                {/if}
               </code>
+            </div>
+            <div>
+              <span class="diag-k">Rotación OSC (cam_rx/ry/rz):</span>
+              <code>
+                {#if visualizerSnapshot?.lastCamNormalizedRot}
+                  [{visualizerSnapshot.lastCamNormalizedRot[0].toFixed(3)}, {visualizerSnapshot.lastCamNormalizedRot[1].toFixed(3)}, {visualizerSnapshot.lastCamNormalizedRot[2].toFixed(3)}]
+                {:else}
+                  --
+                {/if}
+              </code>
+            </div>
+            <div>
+              <span class="diag-k">Multiplexor de 5 Huesos (Path):</span>
+              <code>
+                {visualizerSnapshot?.isSyncingPath ? "Sincronizando (los params synced tardan ~3 s)..." : "Listo (iris_wp_index = 0)"}
+              </code>
+            </div>
+            <div>
+              <span class="diag-k">Estado del Sistema:</span>
+              <code>{visualizerSnapshot?.lastError ? visualizerSnapshot.lastError : "OK (12 endpoints activos)"}</code>
             </div>
           </div>
 
+          {#if visualizerSnapshot}
+            {@const dg = visualizerSnapshot.diag}
+            <div class="diag-grid">
+              <div>
+                <span class="diag-k">Sincronización con la cámara real:</span>
+                <code>
+                  ecos de pose {dg.poseEchoes} · enviados al rig {dg.framesSent} · omitidos: apagado {dg.skipped.disabled},
+                  sin ancla {dg.skipped.noAnchor}, recorrido {dg.skipped.externalControl}, sin cambio {dg.skipped.deadband},
+                  ocupado {dg.skipped.busy}
+                </code>
+                {#if dg.lastError}<code>último error: {dg.lastError}</code>{/if}
+              </div>
+              <div>
+                <span class="diag-k">Eco de VRChat (enviado → eco):</span>
+                <code>
+                  {#each camParamNames as n, i}
+                    {@const e = echoFor(n)}
+                    {@const sent = sentFor(i)}
+                    {n.replace("iris_cam_", "")}: {sent === null ? "--" : sent.toFixed(3)} → {e ? e.value.toFixed(3) : "sin eco"}{sent !== null && Math.abs(sent) >= 0.999 ? " (saturado: >50 m del ancla)" : ""}{e && sent !== null && Math.abs(e.value - sent) > 0.02 ? " ⚠" : ""}{i < 5 ? " · " : ""}
+                  {/each}
+                </code>
+              </div>
+              <div>
+                <span class="diag-k">Ajuste fino del ancla (gizmo, ejes del rig):</span>
+                <code>
+                  x {visualizerSnapshot.nudgePos[0].toFixed(2)} m · y {visualizerSnapshot.nudgePos[1].toFixed(2)} m ·
+                  z {visualizerSnapshot.nudgePos[2].toFixed(2)} m · giro {visualizerSnapshot.nudgeYaw.toFixed(0)}°
+                </code>
+              </div>
+            </div>
+            <div class="avatar-sim-controls">
+              <span class="sim-label">Ajuste fino ({nudgeCoarse ? "10 cm / 10°" : "1 cm / 1°"}):</span>
+              <div class="sim-buttons">
+                <button type="button" class="btn-diag ghost" disabled={!visualizerSnapshot.anchorPosition} onclick={() => handleNudge(-1, 0, 0, 0)}>X −</button>
+                <button type="button" class="btn-diag ghost" disabled={!visualizerSnapshot.anchorPosition} onclick={() => handleNudge(1, 0, 0, 0)}>X +</button>
+                <button type="button" class="btn-diag ghost" disabled={!visualizerSnapshot.anchorPosition} onclick={() => handleNudge(0, -1, 0, 0)}>Y −</button>
+                <button type="button" class="btn-diag ghost" disabled={!visualizerSnapshot.anchorPosition} onclick={() => handleNudge(0, 1, 0, 0)}>Y +</button>
+                <button type="button" class="btn-diag ghost" disabled={!visualizerSnapshot.anchorPosition} onclick={() => handleNudge(0, 0, -1, 0)}>Z −</button>
+                <button type="button" class="btn-diag ghost" disabled={!visualizerSnapshot.anchorPosition} onclick={() => handleNudge(0, 0, 1, 0)}>Z +</button>
+                <button type="button" class="btn-diag ghost" disabled={!visualizerSnapshot.anchorPosition} onclick={() => handleNudge(0, 0, 0, -1)}>Giro −</button>
+                <button type="button" class="btn-diag ghost" disabled={!visualizerSnapshot.anchorPosition} onclick={() => handleNudge(0, 0, 0, 1)}>Giro +</button>
+                <button type="button" class="btn-diag ghost" onclick={() => (nudgeCoarse = !nudgeCoarse)}>{nudgeCoarse ? "Paso fino" : "Paso grueso"}</button>
+                <button type="button" class="btn-diag ghost" disabled={!visualizerSnapshot.anchorPosition} onclick={handleResetNudge}>Restablecer ajuste</button>
+              </div>
+            </div>
+          {/if}
+
           <div class="avatar-sim-controls">
-            <span class="sim-label">{t("settings.avatarSimulateTitle")}</span>
+            <span class="sim-label">Acciones Cinemáticas OSC:</span>
             <div class="sim-buttons">
-              <button type="button" class="btn-diag ghost" onclick={() => handleSimulateAvatarAction(1)}>
-                Capturar A (1)
+              <button
+                type="button"
+                class="btn-diag ghost"
+                disabled={!status.connected || visualizerSnapshot?.enabled}
+                onclick={handleVisualizerActivate}
+              >
+                1. Mostrar gizmo
               </button>
-              <button type="button" class="btn-diag ghost" onclick={() => handleSimulateAvatarAction(2)}>
-                Capturar B (2)
+              <button
+                type="button"
+                class="btn-diag primary"
+                disabled={!status.connected || !status.open || status.camera?.rxAvailable === false}
+                onclick={handleVisualizerSetAnchor}
+              >
+                2. Confirmar ancla (Flujo A)
               </button>
-              <button type="button" class="btn-diag ghost" onclick={() => handleSimulateAvatarAction(3)}>
-                Previsualizar (3)
+              <button type="button" class="btn-diag ghost" disabled={!status.connected} onclick={handleVisualizerToggleHide}>
+                {visualizerSnapshot?.hideCam ? "Mostrar en cámaras de VRChat" : "Ocultar de cámaras de VRChat"}
               </button>
-              <button type="button" class="btn-diag primary" onclick={() => handleSimulateAvatarAction(4)}>
-                Ejecutar (4)
+              <button type="button" class="btn-diag ghost" onclick={handleVisualizerSyncPath}>
+                Sincronizar Path 5 Huesos (Flujo B)
               </button>
-              <button type="button" class="btn-diag ghost" onclick={() => handleSimulateAvatarAction(5)}>
-                Detener (5)
-              </button>
-              <button type="button" class="btn-diag ghost" onclick={() => handleSimulateAvatarAction(6)}>
-                Limpiar (6)
-              </button>
-              <button type="button" class="btn-diag ghost" onclick={() => handleSimulateAvatarAction(0)}>
-                Rearmar (0)
+              <button type="button" class="btn-diag ghost" onclick={handleVisualizerResetAnchor}>
+                Resetear Ancla (Reset)
               </button>
             </div>
           </div>
@@ -1537,36 +1678,6 @@
     background: rgba(16, 185, 129, 0.15);
     color: #34d399;
     border-color: rgba(16, 185, 129, 0.35);
-  }
-  .avatar-state-badge.playing,
-  .avatar-state-badge.previewing {
-    background: rgba(59, 130, 246, 0.15);
-    color: #60a5fa;
-    border-color: rgba(59, 130, 246, 0.35);
-  }
-  .avatar-state-badge.error {
-    background: rgba(239, 68, 68, 0.15);
-    color: #f87171;
-    border-color: rgba(239, 68, 68, 0.35);
-  }
-  .action-pill {
-    margin-left: 6px;
-    padding: 2px 6px;
-    border-radius: 4px;
-    font-size: 0.7rem;
-    font-weight: 600;
-  }
-  .action-pill.armed {
-    background: rgba(16, 185, 129, 0.15);
-    color: #34d399;
-  }
-  .action-pill.rearming {
-    background: rgba(245, 158, 11, 0.15);
-    color: #fbbf24;
-  }
-  .rig-status-code {
-    font-size: 0.75rem;
-    color: var(--text-2);
   }
   .avatar-sim-controls {
     margin-top: 14px;

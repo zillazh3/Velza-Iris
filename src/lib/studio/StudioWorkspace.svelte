@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, untrack } from "svelte";
   import {
     Activity,
     Camera,
@@ -330,8 +330,22 @@
   function syncActiveProjectToLibrary(proj: SequenceProject) {
     const idx = sequences.findIndex((s) => s.id === proj.id);
     if (idx >= 0) {
-      sequences[idx] = structuredClone(proj);
+      sequences[idx] = $state.snapshot(proj);
     }
+  }
+
+  /** Abre `proj` como proyecto activo. `proj` suele ser un `$state` (Proxy): `structuredClone` lanza DataCloneError con él. */
+  function openProject(proj: SequenceProject) {
+    // Guardar en memoria las ediciones del proyecto que se abandona (el effect solo sincroniza cambios estructurales).
+    if (proj.id !== activeProject.id) syncActiveProjectToLibrary(activeProject);
+    activeProject = $state.snapshot(proj) as SequenceProject;
+    selectedKeyframeId = activeProject.keyframes[0]?.id ?? null;
+    selectedEffectId = null;
+    playheadTime = 0;
+    undoStack = [];
+    redoStack = [];
+    evaluatedFrame = null;
+    trajectoryPreview = null;
   }
 
   function applyCinematicProfile(profile: CinematicProfile) {
@@ -533,7 +547,8 @@
     void activeProject.effects.length;
     void activeProject.space;
     void activeProject.trajectoryScale;
-    syncActiveProjectToLibrary(activeProject);
+    // `syncActiveProjectToLibrary` lee y escribe `sequences`: sin `untrack` este effect se re-dispara a sí mismo en bucle.
+    untrack(() => syncActiveProjectToLibrary(activeProject));
     refreshMathPreview(false);
   });
 
@@ -656,13 +671,13 @@
     if (!selectedKeyframe) return;
     pushUndoSnapshot();
     const newTime = Math.min(activeProject.duration, Math.round((selectedKeyframe.time + 1.5) * 10) / 10);
-    let sampledPose: Pose = structuredClone(selectedKeyframe.rawPose);
+    let sampledPose: Pose = $state.snapshot(selectedKeyframe.rawPose);
     try {
       sampledPose = await api.sampleBasePoseAt(activeProject, newTime);
     } catch {
       // fallback a evaluatedFrame si está disponible
       if (evaluatedFrame?.basePose) {
-        sampledPose = structuredClone(evaluatedFrame.basePose);
+        sampledPose = $state.snapshot(evaluatedFrame.basePose);
       }
     }
 
@@ -685,7 +700,7 @@
     }
 
     const copy: Keyframe = {
-      ...structuredClone(selectedKeyframe),
+      ...$state.snapshot(selectedKeyframe),
       id: `kf-dup-${Date.now()}`,
       label: `${selectedKeyframe.label} ${t("studio.copySuffix")}`,
       time: newTime,
@@ -698,7 +713,7 @@
             }
           : null,
       look: selectedKeyframe.look
-        ? structuredClone(selectedKeyframe.look)
+        ? $state.snapshot(selectedKeyframe.look)
         : { zoom: 45, exposure: null, focalDistance: null, aperture: null },
     };
     activeProject.keyframes = [...activeProject.keyframes, copy].sort((a, b) => a.time - b.time);
@@ -860,6 +875,18 @@
     void refreshMathPreview(liveScrub);
   }
 
+  let pathSyncDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function scheduleVisualizerPathSync() {
+    if (pathSyncDebounceTimer) {
+      clearTimeout(pathSyncDebounceTimer);
+    }
+    pathSyncDebounceTimer = setTimeout(() => {
+      pathSyncDebounceTimer = null;
+      void api.visualizerSyncPath(activeProject).catch(() => {});
+    }, 120);
+  }
+
   function updateKeyframePos(id: string, newPos: [number, number, number]) {
     const kf = activeProject.keyframes.find((k) => k.id === id);
     if (!kf) return;
@@ -871,6 +898,12 @@
       };
     }
     void refreshMathPreview(false);
+
+    // Actualización de la cámara en tiempo real
+    void api.visualizerSyncCamera(kf.rawPose).catch(() => {});
+
+    // Debounce / Throttling para deformar el Path de 5 huesos de forma secuencial sin solapar iris_wp_index
+    scheduleVisualizerPathSync();
   }
 
   function openKeyframeContextMenu(kf: Keyframe, e: MouseEvent) {
@@ -1118,7 +1151,7 @@
       selectedEffect.startTime + selectedEffect.duration,
     );
     const copy: EffectClip = {
-      ...structuredClone(selectedEffect),
+      ...$state.snapshot(selectedEffect),
       id: `ef-dup-${Date.now()}`,
       startTime: Math.round(nextStart * 10) / 10,
     };
@@ -1682,14 +1715,7 @@
           size="sm"
           onchange={(newId) => {
             const found = sequences.find((s) => s.id === newId);
-            if (found) {
-              activeProject = structuredClone(found);
-              selectedKeyframeId = activeProject.keyframes[0]?.id ?? null;
-              selectedEffectId = null;
-              playheadTime = 0;
-              undoStack = [];
-              redoStack = [];
-            }
+            if (found && found.id !== activeProject.id) openProject(found);
           }}
         />
       </div>
@@ -2605,7 +2631,7 @@
                   type="button"
                   class="ghost sm"
                   onclick={() => {
-                    activeProject = structuredClone(seq);
+                    openProject(seq);
                     selectedKeyframeId = activeProject.keyframes[0]?.id ?? null;
                     playheadTime = 0;
                   }}
