@@ -191,12 +191,7 @@ fn eval_base_pose(kfs: &[Keyframe], world_poses: &[Pose], t: f32) -> Pose {
 pub fn sample_base_pose_at(project: &SequenceProject, active_anchor: Option<&Anchor>, t: f32) -> Pose {
     let mut kfs = project.keyframes.clone();
     kfs.sort_by(|a, b| a.time.partial_cmp(&b.time).unwrap_or(std::cmp::Ordering::Equal));
-    let scale = project.trajectory_scale;
-    let fallback_anchor = project.anchor_snapshot.as_ref();
-    let world_poses: Vec<Pose> = kfs
-        .iter()
-        .map(|k| k.world_pose(project.space, active_anchor, fallback_anchor, scale))
-        .collect();
+    let world_poses: Vec<Pose> = kfs.iter().map(|k| project.world_pose_of(k, active_anchor)).collect();
     eval_base_pose(&kfs, &world_poses, t)
 }
 
@@ -439,15 +434,12 @@ pub fn evaluate(project: &SequenceProject, active_anchor: Option<&Anchor>, t: f3
     let mut kfs = project.keyframes.clone();
     kfs.sort_by(|a, b| a.time.partial_cmp(&b.time).unwrap_or(std::cmp::Ordering::Equal));
 
-    let scale = project.trajectory_scale;
-    let fallback_anchor = project.anchor_snapshot.as_ref();
-    let eff_anchor = active_anchor.or(fallback_anchor);
-    let world_poses: Vec<Pose> = kfs
-        .iter()
-        .map(|k| k.world_pose(project.space, active_anchor, fallback_anchor, scale))
-        .collect();
+    // `eff_anchor` (viva) solo guía el seguimiento de objetivo; el path y sus efectos cuelgan de `path_anchor`.
+    let eff_anchor = active_anchor.or(project.anchor_snapshot.as_ref());
+    let world_poses: Vec<Pose> = kfs.iter().map(|k| project.world_pose_of(k, active_anchor)).collect();
 
-    let pivot = eff_anchor
+    let pivot = project
+        .path_anchor(active_anchor)
         .map(|a| a.eye)
         .or_else(|| project.target.map(|tg| tg.world_pos))
         .unwrap_or([0.0, 1.6, 0.0]);
@@ -527,12 +519,11 @@ pub fn sample_trajectory(project: &SequenceProject, active_anchor: Option<&Ancho
     let mut kfs = project.keyframes.clone();
     kfs.sort_by(|a, b| a.time.partial_cmp(&b.time).unwrap_or(std::cmp::Ordering::Equal));
 
-    let scale = project.trajectory_scale;
     let fallback_anchor = project.anchor_snapshot.as_ref();
     let nodes: Vec<SpatialNode> = kfs
         .iter()
         .map(|k| {
-            let wp = k.world_pose(project.space, active_anchor, fallback_anchor, scale);
+            let wp = project.world_pose_of(k, active_anchor);
             SpatialNode {
                 id: k.id.clone(),
                 label: k.label.clone(),
@@ -800,6 +791,62 @@ mod tests {
 
         let prev = sample_trajectory(&p, Some(&operator_anchor), 16);
         assert_eq!(prev.target_pos, Some(operator_anchor.eye));
+    }
+
+    #[test]
+    fn path_lock_keeps_path_and_effects_fixed_when_live_anchor_changes() {
+        let a0 = Anchor { eye: [1.0, 1.65, 2.0], yaw: 20.0 };
+        let a1 = Anchor { eye: [-8.0, 1.7, 5.0], yaw: 140.0 };
+        let mut p = SequenceProject::new("lock", "Lock", 10.0);
+        p.keyframes.push(make_kf("A", 0.0, [2.0, 1.6, 4.0], 180.0));
+        p.keyframes.push(make_kf("B", 5.0, [4.0, 1.8, 3.0], 90.0));
+        p.keyframes.push(make_kf("C", 10.0, [3.0, 1.6, -1.0], 0.0));
+        p.effects.push(EffectClip {
+            id: "orbit".into(),
+            kind: EffectKind::Orbit,
+            track: 0,
+            start_time: 0.0,
+            duration: 10.0,
+            intensity: 1.0,
+            speed: 1.0,
+            param_a: Some(60.0),
+            param_b: None,
+            easing: Transition::Linear,
+            custom_curve: None,
+            enabled: true,
+        });
+        p.bind_anchor(a0);
+        assert!(p.path_lock);
+
+        for t in [0.0, 2.5, 5.0, 7.7, 10.0] {
+            let ev0 = evaluate(&p, Some(&a0), t);
+            // Re-anclar en otro lugar, o quedarse sin ancla (cámara cerrada), no mueve nada: ni el path ni el pivote del Orbit.
+            assert_eq!(evaluate(&p, Some(&a1), t), ev0);
+            assert_eq!(evaluate(&p, None, t), ev0);
+        }
+        assert!(dist3(evaluate(&p, Some(&a1), 5.0).base_pose.pos, [4.0, 1.8, 3.0]) < 1e-4);
+        assert_eq!(sample_trajectory(&p, Some(&a0), 32).base_path, sample_trajectory(&p, Some(&a1), 32).base_path);
+        assert_eq!(sample_base_pose_at(&p, Some(&a0), 3.3), sample_base_pose_at(&p, Some(&a1), 3.3));
+    }
+
+    #[test]
+    fn portable_mode_relocates_path_preserving_anchor_relative_offsets() {
+        let a0 = Anchor { eye: [1.0, 1.65, 2.0], yaw: 20.0 };
+        let a1 = Anchor { eye: [-8.0, 1.7, 5.0], yaw: 140.0 };
+        let mut p = SequenceProject::new("portable", "Portable", 10.0);
+        p.keyframes.push(make_kf("A", 0.0, [2.0, 1.6, 4.0], 180.0));
+        p.keyframes.push(make_kf("B", 10.0, [4.0, 1.8, 3.0], 90.0));
+        p.bind_anchor(a0);
+        p.path_lock = false;
+
+        let at_a0 = evaluate(&p, Some(&a0), 10.0).base_pose;
+        assert!(dist3(at_a0.pos, [4.0, 1.8, 3.0]) < 1e-3);
+        let at_a1 = evaluate(&p, Some(&a1), 10.0).base_pose;
+        assert!(dist3(at_a1.pos, at_a0.pos) > 1.0, "en modo portable el path sigue al ancla nueva");
+        // Origin Shift Compensation: lo que se ve desde cada ancla es lo mismo (P_local = R⁻¹(P_world − T)).
+        let (l0, l1) = (a0.world_to_local(&at_a0), a1.world_to_local(&at_a1));
+        assert!(dist3(l0.pos, l1.pos) < 1e-3);
+        assert!(l0.rot.iter().zip(l1.rot).all(|(x, y)| (x - y).abs() < 1e-2));
     }
 
     #[test]
