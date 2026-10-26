@@ -1,7 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import {
-    Activity,
     Aperture,
     BookOpen,
     Camera,
@@ -20,7 +19,6 @@
     Mountain,
     Orbit,
     PersonStanding,
-    Plug,
     Radio,
     RotateCcw,
     Settings,
@@ -426,36 +424,37 @@
   <main class:wide={activeView === "studio"}>
     <!-- Cabecera global compacta con indicadores de Conexión, Cámara, Lectura de Pose y Calibración -->
     <header class="global-status-bar">
-      <div class="chips" aria-live="polite">
-        <span class="chip" class:on={status.connected} title={t("status.tooltip.connected")}>
-          <Plug size={15} /> {t(status.connected ? "status.connected" : "status.disconnected")}
+      <div class="status-line" aria-live="polite">
+        <span class="stat" class:on={status.connected} title={t("status.tooltip.connected")}>
+          <i class="dot"></i>{t(status.connected ? "status.connected" : "status.disconnected")}
         </span>
-        <span class="chip" class:on={status.open} title={t("status.tooltip.camera")}>
-          <Camera size={15} /> {t(status.open ? "status.open" : "status.closed")}
+        <span class="stat" class:on={status.open} title={t("status.tooltip.camera")}>
+          <i class="dot"></i>{t(status.open ? "status.open" : "status.closed")}
         </span>
         <span
-          class="chip"
+          class="stat"
           class:on={Boolean(status.camera?.poseFresh)}
-          title={t("status.tooltip.pose")}
+          title={t(status.camera?.poseFresh ? "status.tooltip.pose" : "status.tooltip.poseStale")}
         >
-          <Activity size={15} />
-          {t(status.camera?.poseFresh ? "status.poseFresh" : "status.poseStale")}
+          <i class="dot"></i>{t(status.camera?.poseFresh ? "status.poseFresh" : "status.poseStale")}
         </span>
         <span
-          class="chip"
+          class="stat"
           class:on={status.anchored}
           title="{t('status.tooltip.anchor')}{status.anchorState ? ` · ${t(`anchor.state.${status.anchorState.state}`)}` : ''}"
         >
-          <Crosshair size={15} />
-          {status.anchorState && (status.anchorState.state === "acquiring" || status.anchorState.state === "syncLost" || status.anchorState.state === "recovering")
+          <i class="dot"></i>{status.anchorState && (status.anchorState.state === "acquiring" || status.anchorState.state === "syncLost" || status.anchorState.state === "recovering")
             ? t(`anchor.state.${status.anchorState.state}`)
             : t(status.anchored ? "status.anchored" : "status.unanchored")}
         </span>
-        {#if status.open}
+      </div>
+
+      {#if status.open}
+        <div class="toggle-group" role="group" aria-label={t("camera.toggle.group")}>
           <button
             type="button"
-            class="chip chip-btn"
-            class:on={Boolean(status.camera?.streaming)}
+            class="tgl"
+            aria-pressed={Boolean(status.camera?.streaming)}
             title={t("camera.toggle.streamingHelp")}
             onclick={() => toggleCamera("Streaming", status.camera?.streaming)}
           >
@@ -463,8 +462,8 @@
           </button>
           <button
             type="button"
-            class="chip chip-btn"
-            class:on={Boolean(status.camera?.lookAtMe)}
+            class="tgl"
+            aria-pressed={Boolean(status.camera?.lookAtMe)}
             title={t("camera.toggle.lookAtMeHelp")}
             onclick={() => toggleCamera("LookAtMe", status.camera?.lookAtMe)}
           >
@@ -472,15 +471,15 @@
           </button>
           <button
             type="button"
-            class="chip chip-btn"
-            class:on={Boolean(status.camera?.smoothMovement)}
+            class="tgl"
+            aria-pressed={Boolean(status.camera?.smoothMovement)}
             title={t("camera.toggle.smoothHelp")}
             onclick={() => toggleCamera("SmoothMovement", status.camera?.smoothMovement)}
           >
             <Waves size={14} /> {t("camera.toggle.smooth")}
           </button>
-        {/if}
-      </div>
+        </div>
+      {/if}
 
       <div class="quick-top-actions">
         <button
@@ -513,11 +512,11 @@
     </header>
 
     {#if !status.connected}
-      <p class="banner">{t("banner.disconnected")}</p>
+      <p class="banner" role="status">{t("banner.disconnected")}</p>
     {:else if status.camera && status.camera.rxAvailable === false}
-      <p class="banner">{t("banner.rxUnavailable")}</p>
+      <p class="banner" role="status">{t("banner.rxUnavailable")}</p>
     {:else if !status.open}
-      <p class="banner">{t("banner.closed")}</p>
+      <p class="banner" role="status">{t("banner.closed")}</p>
     {/if}
 
     {#if message}
@@ -1174,6 +1173,7 @@
   .item[aria-current="page"] {
     color: var(--text);
     background: var(--accent-subtle);
+    font-weight: 600;
   }
   .item .text {
     flex: 1;
@@ -1206,39 +1206,55 @@
     gap: 10px;
     margin-bottom: 12px;
   }
-  .chips {
+  .status-line {
     display: flex;
     flex-wrap: wrap;
-    gap: 7px;
+    align-items: center;
+    gap: 4px 16px;
+    font-size: 0.8rem;
+    color: var(--text-muted);
   }
-  .chip {
+  .stat {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
-    padding: 5px 11px;
-    border-radius: 999px;
-    background: var(--surface);
+    gap: 7px;
+    cursor: default;
+  }
+  .stat.on {
     color: var(--text-2);
-    font-size: 0.8rem;
   }
-  .chip.on {
-    color: var(--text);
-    box-shadow: 0 0 14px rgba(var(--accent-color-rgb), 0.22);
-    background: var(--accent-subtle);
+  .dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--text-muted);
+    opacity: 0.6;
   }
-  .chip-btn {
-    cursor: pointer;
-    font-family: inherit;
-    transition: all 150ms ease;
+  .stat.on .dot {
+    background: var(--ok);
+    opacity: 1;
   }
-  .chip-btn:hover:not(:disabled) {
-    border-color: var(--text-2);
-    color: var(--text);
+  .toggle-group {
+    display: inline-flex;
+    gap: 2px;
+    padding: 2px;
+    border-radius: var(--radius-md);
+    background: var(--surface);
+  }
+  .tgl {
+    padding: 4px 10px;
+    font-size: 0.78rem;
+    background: transparent;
+    color: var(--text-2);
+    border-radius: var(--radius-sm);
+  }
+  .tgl:hover:not(:disabled) {
     background: var(--surface-hover);
+    color: var(--text);
   }
-  .chip-btn:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
+  .tgl[aria-pressed="true"] {
+    background: var(--accent-subtle);
+    color: var(--text);
   }
   .quick-top-actions {
     display: flex;
@@ -1254,17 +1270,20 @@
   .banner,
   .msg {
     margin: 0 0 12px;
-    padding: 10px 14px;
-    border-radius: 12px;
-    background: var(--surface-raised);
-    font-size: 0.86rem;
+    padding: 9px 14px;
+    border-radius: var(--radius-md);
+    background: var(--surface);
+    font-size: 0.84rem;
     white-space: pre-line;
   }
+  .banner {
+    box-shadow: inset 3px 0 0 var(--warn);
+  }
   .msg {
-    border: 1px solid #c85a7a;
+    box-shadow: inset 3px 0 0 var(--danger);
   }
   .msg.ok {
-    border-color: var(--text-2);
+    box-shadow: inset 3px 0 0 var(--ok);
   }
 
   /* Inicio */
