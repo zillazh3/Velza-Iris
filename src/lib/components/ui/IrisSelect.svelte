@@ -411,10 +411,9 @@
     align-items: center;
     justify-content: space-between;
     gap: 8px;
-    background: var(--select-bg, rgba(22, 16, 36, 0.82));
-    border: 1px solid var(--select-border, rgba(184, 169, 255, 0.14));
+    background: var(--select-bg, var(--surface));
     box-shadow: var(--select-hairline, inset 0 1px 0 0 rgba(255, 255, 255, 0.08));
-    color: var(--select-text-primary, #ece8ff);
+    color: var(--select-text-primary, var(--text));
     font-family: inherit;
     font-size: 0.875rem;
     font-weight: 500;
@@ -452,13 +451,12 @@
 
   /* Hover & Focus State */
   .iris-trigger:hover:not(:disabled) {
-    border-color: var(--select-border-hover, rgba(184, 169, 255, 0.28));
-    background: var(--select-surface, rgba(30, 22, 48, 0.88));
+    background: var(--select-surface, var(--surface));
   }
 
   .iris-select-root.has-glow .iris-trigger,
   .iris-trigger:focus-visible {
-    border-color: var(--accent-color, #3d5afe);
+    border-color: var(--accent-color, var(--accent));
     box-shadow:
       0 0 0 2px var(--accent-glow, rgba(61, 90, 254, 0.28)),
       var(--select-hairline, inset 0 1px 0 0 rgba(255, 255, 255, 0.1));
@@ -492,7 +490,7 @@
   }
 
   .iris-trigger-label.is-placeholder {
-    color: var(--select-text-muted, #736a93);
+    color: var(--select-text-muted, var(--text-muted));
     font-weight: 400;
   }
 
@@ -500,7 +498,7 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    color: var(--select-text-secondary, #a59cc7);
+    color: var(--select-text-secondary, var(--text-2));
     flex-shrink: 0;
   }
 
@@ -509,7 +507,7 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    color: var(--select-text-secondary, #a59cc7);
+    color: var(--select-text-secondary, var(--text-2));
     flex-shrink: 0;
     transition:
       transform 260ms var(--ease-spring),
@@ -517,12 +515,12 @@
   }
 
   .iris-trigger:hover:not(:disabled) .iris-chevron-wrapper {
-    color: var(--accent-color, #3d5afe);
+    color: var(--accent-color, var(--accent));
   }
 
   .iris-chevron-wrapper.rotated {
     transform: rotate(180deg);
-    color: var(--accent-color, #3d5afe);
+    color: var(--accent-color, var(--accent));
   }
 
   /* Flyout Menu Container */
@@ -583,7 +581,6 @@
     background: var(--select-surface, rgba(28, 20, 44, 0.86));
     backdrop-filter: var(--select-backdrop-blur, blur(20px) saturate(180%));
     -webkit-backdrop-filter: var(--select-backdrop-blur, blur(20px) saturate(180%));
-    border: 1px solid var(--select-border, rgba(184, 169, 255, 0.16));
     border-radius: 13px;
     box-shadow: var(--select-shadow-flyout);
     max-height: 280px;
@@ -601,11 +598,8 @@
     background: transparent;
   }
   .iris-listbox::-webkit-scrollbar-thumb {
-    background: rgba(184, 169, 255, 0.18);
+    background: var(--surface-hover);
     border-radius: 999px;
-  }
-  :root[data-theme="light"] .iris-listbox::-webkit-scrollbar-thumb {
-    background: rgba(0, 0, 0, 0.12);
   }
 
   /* Opciones de la lista */
@@ -619,7 +613,7 @@
     border-radius: 8px;
     cursor: pointer;
     font-size: 0.85rem;
-    color: var(--select-text-primary, #ece8ff);
+    color: var(--select-text-primary, var(--text));
     transition: color 140ms ease;
   }
 
@@ -650,20 +644,20 @@
   }
 
   .iris-option.selected .iris-option-pill {
-    background: var(--accent-subtle, rgba(61, 90, 254, 0.12));
+    background: var(--accent-subtle, rgba(var(--accent-color-rgb), 0.12));
   }
 
   .iris-option.selected.highlighted .iris-option-pill {
-    background: var(--accent-subtle-hover, rgba(61, 90, 254, 0.18));
+    background: var(--accent-subtle-hover, rgba(var(--accent-color-rgb), 0.18));
   }
 
   .iris-option.selected {
-    color: var(--accent-color, #3d5afe);
+    color: var(--accent-color, var(--accent));
     font-weight: 600;
   }
 
   .iris-option.selected .iris-opt-icon {
-    color: var(--accent-color, #3d5afe);
+    color: var(--accent-color, var(--accent));
   }
 
   .iris-option.disabled {
@@ -696,7 +690,7 @@
 
   .iris-option-desc {
     font-size: 0.75rem;
-    color: var(--select-text-muted, #736a93);
+    color: var(--select-text-muted, var(--text-muted));
     font-weight: 400;
     white-space: nowrap;
     overflow: hidden;
@@ -704,7 +698,7 @@
   }
 
   .iris-option.selected .iris-option-desc {
-    color: var(--accent-color, #3d5afe);
+    color: var(--accent-color, var(--accent));
     opacity: 0.8;
   }
 
@@ -721,16 +715,11 @@
   .iris-option-shortcut {
     font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
     font-size: 0.72rem;
-    color: var(--select-text-muted, #736a93);
+    color: var(--select-text-muted, var(--text-muted));
     background: rgba(255, 255, 255, 0.06);
     border: 1px solid rgba(255, 255, 255, 0.08);
     border-radius: 5px;
     padding: 1px 5px;
-  }
-
-  :root[data-theme="light"] .iris-option-shortcut {
-    background: rgba(0, 0, 0, 0.04);
-    border-color: rgba(0, 0, 0, 0.08);
   }
 
   /* Checkmark animado (scale + fade) */
@@ -740,7 +729,7 @@
     justify-content: center;
     width: 16px;
     height: 16px;
-    color: var(--accent-color, #3d5afe);
+    color: var(--accent-color, var(--accent));
     opacity: 0;
     transform: scale(0.65);
     transition:
@@ -757,6 +746,6 @@
     padding: 16px;
     text-align: center;
     font-size: 0.82rem;
-    color: var(--select-text-muted, #736a93);
+    color: var(--select-text-muted, var(--text-muted));
   }
 </style>

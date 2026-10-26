@@ -237,7 +237,6 @@
     background: var(--select-surface, rgba(26, 18, 44, 0.94));
     backdrop-filter: blur(20px) saturate(180%);
     -webkit-backdrop-filter: blur(20px) saturate(180%);
-    border: 1px solid var(--select-border, rgba(184, 169, 255, 0.22));
     border-radius: 14px;
     box-shadow:
       0 0 0 1px rgba(255, 255, 255, 0.08),
@@ -261,21 +260,13 @@
     }
   }
 
-  :root[data-theme="light"] .kf-popover {
-    background: rgba(255, 255, 255, 0.96);
-    border-color: rgba(0, 0, 0, 0.12);
-    box-shadow:
-      0 0 0 1px rgba(0, 0, 0, 0.06),
-      0 10px 25px -4px rgba(0, 0, 0, 0.12);
-  }
-
   .pop-head {
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 8px;
     padding-bottom: 6px;
-    border-bottom: 1px solid rgba(184, 169, 255, 0.1);
+    border-bottom: 1px solid var(--border-subtle);
   }
 
   .pop-title {
@@ -287,14 +278,14 @@
   }
 
   :global(.pop-icon) {
-    color: var(--accent, #3d5afe);
+    color: var(--accent);
     flex-shrink: 0;
   }
 
   .title-input {
     background: transparent;
     border: 1px solid transparent;
-    color: var(--text, #ece8ff);
+    color: var(--text);
     font-weight: 600;
     font-size: 0.84rem;
     padding: 2px 4px;
@@ -306,12 +297,7 @@
 
   .title-input:hover,
   .title-input:focus {
-    border-color: rgba(184, 169, 255, 0.25);
-    background: rgba(14, 10, 26, 0.4);
-  }
-
-  :root[data-theme="light"] .title-input {
-    color: #12101a;
+    background: var(--surface-raised);
   }
 
   .icon-btn {
@@ -345,7 +331,7 @@
 
   .pop-label {
     font-size: 0.72rem;
-    color: var(--text-2, #a59cc7);
+    color: var(--text-2);
     font-weight: 500;
   }
 
@@ -356,31 +342,24 @@
     padding: 1px 6px;
     font-size: 0.68rem;
     border-radius: 999px;
-    background: rgba(61, 90, 254, 0.15);
-    color: var(--lavender, #b8a9ff);
-    border: 1px solid rgba(61, 90, 254, 0.25);
+    background: rgba(var(--accent-color-rgb), 0.15);
+    color: var(--text-2));
+    border: 1px solid rgba(var(--accent-color-rgb), 0.25);
     cursor: pointer;
   }
 
   .curve-tool-btn:hover {
-    background: rgba(61, 90, 254, 0.3);
+    background: rgba(var(--accent-color-rgb), 0.3);
   }
 
   .pop-field input[type="number"] {
     width: 100%;
-    background: rgba(14, 10, 26, 0.55);
-    border: 1px solid rgba(184, 169, 255, 0.16);
+    background: var(--surface-raised);
     border-radius: 8px;
     padding: 5px 8px;
     font-size: 0.8rem;
-    color: var(--text, #ece8ff);
+    color: var(--text);
     outline: none;
-  }
-
-  :root[data-theme="light"] .pop-field input[type="number"] {
-    background: #f7f7fa;
-    border-color: rgba(0, 0, 0, 0.1);
-    color: #12101a;
   }
 
   .pop-coords-readout {
@@ -388,15 +367,10 @@
     justify-content: space-between;
     font-size: 0.68rem;
     font-family: ui-monospace, SFMono-Regular, monospace;
-    color: var(--text-2, #a59cc7);
-    background: rgba(14, 10, 26, 0.35);
+    color: var(--text-2);
+    background: var(--surface-raised);
     padding: 4px 6px;
     border-radius: 6px;
-  }
-
-  :root[data-theme="light"] .pop-coords-readout {
-    background: rgba(0, 0, 0, 0.03);
-    color: #554f67;
   }
 
   .pop-actions {

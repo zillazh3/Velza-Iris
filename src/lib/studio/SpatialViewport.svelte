@@ -398,7 +398,7 @@
     <!-- Grilla espacial de referencia -->
     <g class="grid-lines">
       {#each gridLines as ln, idx (idx)}
-        <line x1={ln.x1} y1={ln.y1} x2={ln.x2} y2={ln.y2} stroke="var(--vp-grid-line, rgba(184, 169, 255, 0.07))" stroke-width="1" />
+        <line x1={ln.x1} y1={ln.y1} x2={ln.x2} y2={ln.y2} stroke="var(--border-subtle)" stroke-width="1" />
       {/each}
     </g>
 
@@ -412,14 +412,14 @@
         preview.anchorPos[2] + Math.cos(yawRad) * 0.45,
       ])}
       <g class="anchor-marker">
-        <line x1={aProj.x} y1={aProj.y} x2={aFwd.x} y2={aFwd.y} stroke="#b8a9ff" stroke-width="2" stroke-dasharray="3 2" />
+        <line x1={aProj.x} y1={aProj.y} x2={aFwd.x} y2={aFwd.y} stroke="var(--text-2)" stroke-width="2" stroke-dasharray="3 2" />
         <polygon
           points="{aProj.x},{aProj.y - 7} {aProj.x + 7},{aProj.y} {aProj.x},{aProj.y + 7} {aProj.x - 7},{aProj.y}"
           fill="#2a1446"
-          stroke="#b8a9ff"
+          stroke="var(--text-2)"
           stroke-width="2"
         />
-        <text x={aProj.x + 10} y={aProj.y + 4} fill="#b8a9ff" font-size="11" font-weight="600">{t("viewport.anchor")}</text>
+        <text x={aProj.x + 10} y={aProj.y + 4} fill="var(--text-2)" font-size="11" font-weight="600">{t("viewport.anchor")}</text>
       </g>
     {/if}
 
@@ -427,9 +427,9 @@
     {#if preview?.targetPos}
       {@const tProj = project(preview.targetPos)}
       <g class="target-marker">
-        <circle cx={tProj.x} cy={tProj.y} r="8" fill="none" stroke="#ff708d" stroke-width="1.8" stroke-dasharray="2 2" />
-        <circle cx={tProj.x} cy={tProj.y} r="3" fill="#ff708d" />
-        <text x={tProj.x + 10} y={tProj.y + 4} fill="#ff708d" font-size="11">{t("viewport.target")}</text>
+        <circle cx={tProj.x} cy={tProj.y} r="8" fill="none" stroke="var(--danger)" stroke-width="1.8" stroke-dasharray="2 2" />
+        <circle cx={tProj.x} cy={tProj.y} r="3" fill="var(--danger)" />
+        <text x={tProj.x + 10} y={tProj.y + 4} fill="var(--danger)" font-size="11">{t("viewport.target")}</text>
       </g>
     {/if}
 
@@ -437,14 +437,14 @@
     {#if preview && preview.basePath.length > 1}
       <polyline
         fill="none"
-        stroke="rgba(184, 169, 255, 0.35)"
+        stroke="var(--border-strong)"
         stroke-width="2"
         stroke-dasharray="4 4"
         points={polylineAttr(preview.basePath)}
       />
       <polyline
         fill="none"
-        stroke="#3d5afe"
+        stroke="var(--accent)"
         stroke-width="3"
         stroke-linecap="round"
         stroke-linejoin="round"
@@ -474,19 +474,19 @@
           }}
         >
           <!-- Cono/Vector de mirada -->
-          <line x1={p.x} y1={p.y} x2={tip.x} y2={tip.y} stroke={isSelected ? "#ece8ff" : "#8c52ff"} stroke-width="2" />
-          <circle cx={tip.x} cy={tip.y} r="2.5" fill={isSelected ? "#ece8ff" : "#8c52ff"} />
+          <line x1={p.x} y1={p.y} x2={tip.x} y2={tip.y} stroke={isSelected ? "var(--text)" : "var(--text-muted)"} stroke-width="2" />
+          <circle cx={tip.x} cy={tip.y} r="2.5" fill={isSelected ? "var(--text)" : "var(--text-muted)"} />
 
           <!-- Punto Keyframe -->
           <circle
             cx={p.x}
             cy={p.y}
             r={isSelected ? 9 : 7}
-            fill={idx === 0 ? "#26c6da" : idx === preview.nodes.length - 1 ? "#ff708d" : "#3d5afe"}
+            fill={idx === 0 ? "#26c6da" : idx === preview.nodes.length - 1 ? "var(--danger)" : "var(--accent)"}
             stroke={isSelected ? "#ffffff" : "#0e0a1a"}
             stroke-width={isSelected ? 2.5 : 1.5}
           />
-          <text x={p.x} y={p.y - 12} text-anchor="middle" fill="var(--vp-node-text, #ece8ff)" font-size="11" font-weight="600">
+          <text x={p.x} y={p.y - 12} text-anchor="middle" fill="var(--text)" font-size="11" font-weight="600">
             {formatKeyframeLabel(node.label)} ({node.time.toFixed(1)}s)
           </text>
         </g>
@@ -502,7 +502,7 @@
             height="24"
             rx="6"
             fill="var(--vp-tooltip-bg, rgba(22, 16, 36, 0.95))"
-            stroke="var(--accent, #3d5afe)"
+            stroke="var(--accent)"
             stroke-width="1.5"
           />
           <text
@@ -525,7 +525,7 @@
       {@const cProj = project(currentFrame.finalPose.pos)}
       <g class="eval-cursor">
         <circle cx={cProj.x} cy={cProj.y} r="10" fill="rgba(255, 255, 255, 0.15)" />
-        <circle cx={cProj.x} cy={cProj.y} r="5" fill="#ffffff" stroke="#3d5afe" stroke-width="2" />
+        <circle cx={cProj.x} cy={cProj.y} r="5" fill="#ffffff" stroke="var(--accent)" stroke-width="2" />
       </g>
     {/if}
 
@@ -533,9 +533,9 @@
     {#if liveCameraPose}
       {@const lProj = project(liveCameraPose.pos)}
       <g class="live-vrc-cam">
-        <circle cx={lProj.x} cy={lProj.y} r="8" fill="none" stroke="#4ade80" stroke-width="2" />
-        <circle cx={lProj.x} cy={lProj.y} r="3" fill="#4ade80" />
-        <text x={lProj.x + 11} y={lProj.y + 4} fill="#4ade80" font-size="10.5" font-weight="600">{t("viewport.liveVrc")}</text>
+        <circle cx={lProj.x} cy={lProj.y} r="8" fill="none" stroke="var(--ok)" stroke-width="2" />
+        <circle cx={lProj.x} cy={lProj.y} r="3" fill="var(--ok)" />
+        <text x={lProj.x + 11} y={lProj.y + 4} fill="var(--ok)" font-size="10.5" font-weight="600">{t("viewport.liveVrc")}</text>
       </g>
     {/if}
   </svg>
@@ -562,43 +562,16 @@
     flex-direction: column;
     gap: 8px;
     background: var(--surface);
-    border: 1px solid rgba(184, 169, 255, 0.12);
     border-radius: 14px;
     padding: 12px;
-    --vp-glow-start: #2a1446;
-    --vp-glow-end: #0e0a1a;
-    --vp-glow-op1: 0.55;
-    --vp-glow-op2: 0.95;
-    --vp-node-text: #ece8ff;
-    --vp-grid-line: rgba(184, 169, 255, 0.07);
-    --vp-tooltip-bg: rgba(22, 16, 36, 0.95);
-    --vp-tooltip-text: #ffffff;
-  }
-  :global(:root[data-theme="light"]) .viewport-wrap {
-    background: #ffffff;
-    border-color: rgba(0, 0, 0, 0.08);
-    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.04);
-    --vp-glow-start: #eae6f7;
-    --vp-glow-end: #f4f3fa;
-    --vp-glow-op1: 0.75;
-    --vp-glow-op2: 0.95;
-    --vp-node-text: #1d1730;
-    --vp-grid-line: rgba(109, 88, 201, 0.15);
-    --vp-tooltip-bg: rgba(255, 255, 255, 0.96);
-    --vp-tooltip-text: #12101a;
-  }
-  :global(:root[data-theme="light"]) .vp-btn {
-    background: rgba(0, 0, 0, 0.04);
-    border-color: rgba(0, 0, 0, 0.08);
-    color: var(--text-2);
-  }
-  :global(:root[data-theme="light"]) .vp-btn.active {
-    background: var(--velvet);
-    color: var(--royal);
-    border-color: var(--accent);
-  }
-  :global(:root[data-theme="light"]) .vp-svg {
-    border-color: rgba(0, 0, 0, 0.08);
+    --vp-glow-start: var(--bg-viewport);
+    --vp-glow-end: var(--bg-viewport);
+    --vp-glow-op1: 1;
+    --vp-glow-op2: 1;
+    --vp-node-text: var(--text);
+    --vp-grid-line: var(--border-strong);
+    --vp-tooltip-bg: var(--surface-raised);
+    --vp-tooltip-text: var(--text);
   }
   .vp-bar {
     display: flex;
@@ -613,7 +586,7 @@
     gap: 6px;
     font-size: 0.85rem;
     font-weight: 600;
-    color: var(--lavender);
+    color: var(--text-2);
   }
   .vp-modes {
     display: flex;
@@ -623,14 +596,12 @@
     padding: 4px 9px;
     font-size: 0.76rem;
     border-radius: 8px;
-    background: rgba(14, 10, 26, 0.6);
+    background: var(--surface-raised);
     color: var(--text-2);
-    border: 1px solid rgba(184, 169, 255, 0.12);
   }
   .vp-btn.active {
-    background: var(--velvet);
+    background: var(--accent-subtle);
     color: var(--text);
-    border-color: var(--accent);
   }
   .vp-svg {
     width: 100%;
@@ -639,7 +610,6 @@
     border-radius: 10px;
     cursor: grab;
     user-select: none;
-    border: 1px solid rgba(184, 169, 255, 0.08);
   }
   .compact .vp-svg {
     max-height: 215px;
@@ -652,7 +622,7 @@
     transition: filter 120ms ease;
   }
   .kf-node:hover {
-    filter: drop-shadow(0 0 6px var(--accent, #3d5afe));
+    filter: drop-shadow(0 0 6px var(--accent));
   }
   .kf-node:active,
   .kf-node.is-dragging {
@@ -691,17 +661,17 @@
     background: #26c6da;
   }
   .dot.mid {
-    background: #3d5afe;
+    background: var(--accent);
   }
   .dot.end {
-    background: #ff708d;
+    background: var(--danger);
   }
   .dot.vrc {
-    background: #4ade80;
+    background: var(--ok);
   }
   .dot.cursor {
     background: #ffffff;
-    border: 1.5px solid #3d5afe;
+    border: 1.5px solid var(--accent);
   }
   .dist-info {
     display: inline-flex;

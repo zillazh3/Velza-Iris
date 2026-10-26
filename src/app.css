@@ -43,10 +43,6 @@
   --accent-subtle-hover: rgba(var(--accent-color-rgb), 0.2);
   --accent-foreground: #ffffff;
 
-  /* Alias legacy: se eliminan al terminar la limpieza de hardcodes (F2) */
-  --lavender: var(--text-2);
-  --velvet: var(--surface-raised);
-  --royal: var(--accent-color);
 
   /* Tokens de componente: Custom Select */
   --select-bg: var(--surface);
@@ -211,7 +207,7 @@ h4 {
 }
 
 .tag {
-  color: var(--lavender);
+  color: var(--text-2);
 }
 
 button {

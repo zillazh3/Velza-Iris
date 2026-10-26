@@ -146,9 +146,8 @@
     align-items: center;
     justify-content: center;
     border-radius: 6px;
-    background: var(--select-bg, rgba(22, 16, 36, 0.85));
-    border: 1px solid var(--select-border, rgba(184, 169, 255, 0.22));
-    box-shadow: inset 0 1px 0 0 rgba(255, 255, 255, 0.08);
+    background: var(--surface-hover);
+    box-shadow: inset 0 0 0 1px var(--border-strong);
     transition:
       background-color 160ms cubic-bezier(0.16, 1, 0.3, 1),
       border-color 160ms cubic-bezier(0.16, 1, 0.3, 1),
@@ -171,18 +170,17 @@
   }
 
   .iris-checkbox-root:hover:not(.is-disabled) .iris-checkbox-control {
-    border-color: var(--lavender, rgba(184, 169, 255, 0.45));
     background: var(--select-surface-hover, rgba(255, 255, 255, 0.06));
   }
 
   .is-checked .iris-checkbox-control {
-    background: var(--accent, #3d5afe) !important;
-    border-color: var(--accent, #3d5afe) !important;
-    box-shadow: 0 0 12px var(--accent-glow, rgba(61, 90, 254, 0.35)) !important;
+    background: var(--accent) !important;
+    border-color: var(--accent) !important;
+    box-shadow: 0 0 12px var(--accent-glow, rgba(var(--accent-color-rgb), 0.35)) !important;
   }
 
   .iris-checkbox-control:focus-visible {
-    outline: 2px solid var(--accent, #3d5afe);
+    outline: 2px solid var(--accent);
     outline-offset: 2px;
   }
 
@@ -215,8 +213,7 @@
     display: inline-flex;
     align-items: center;
     border-radius: 999px;
-    background: rgba(184, 169, 255, 0.16);
-    border: 1px solid rgba(184, 169, 255, 0.18);
+    background: var(--surface-hover);
     transition:
       background-color 200ms cubic-bezier(0.16, 1, 0.3, 1),
       border-color 200ms cubic-bezier(0.16, 1, 0.3, 1),
@@ -237,19 +234,9 @@
   }
 
   .is-checked .iris-switch-control {
-    background: var(--accent, #3d5afe);
-    border-color: var(--accent, #3d5afe);
-    box-shadow: 0 0 14px var(--accent-glow, rgba(61, 90, 254, 0.32));
-  }
-
-  :root[data-theme="light"] .iris-switch-control {
-    background: rgba(0, 0, 0, 0.12);
-    border-color: rgba(0, 0, 0, 0.12);
-  }
-
-  :root[data-theme="light"] .is-checked .iris-switch-control {
-    background: var(--accent, #3352ea);
-    border-color: var(--accent, #3352ea);
+    background: var(--accent);
+    border-color: var(--accent);
+    box-shadow: 0 0 14px var(--accent-glow, rgba(var(--accent-color-rgb), 0.32));
   }
 
   .iris-switch-thumb {
@@ -279,7 +266,7 @@
   }
 
   .iris-switch-control:focus-visible {
-    outline: 2px solid var(--accent, #3d5afe);
+    outline: 2px solid var(--accent);
     outline-offset: 2px;
   }
 
@@ -294,32 +281,13 @@
   .iris-checkbox-label {
     font-size: 0.82rem;
     font-weight: 500;
-    color: var(--text, #ece8ff);
+    color: var(--text);
     line-height: 1.25;
   }
 
   .iris-checkbox-desc {
     font-size: 0.72rem;
-    color: var(--text-2, #a59cc7);
+    color: var(--text-2);
     line-height: 1.2;
-  }
-
-  :root[data-theme="light"] .iris-checkbox-control {
-    background: #ffffff;
-    border-color: rgba(0, 0, 0, 0.18);
-    box-shadow: inset 0 1px 0 0 rgba(255, 255, 255, 0.9);
-  }
-
-  :root[data-theme="light"] .iris-checkbox-root:hover:not(.is-disabled) .iris-checkbox-control {
-    border-color: var(--royal, #3352ea);
-    background: rgba(0, 0, 0, 0.03);
-  }
-
-  :root[data-theme="light"] .iris-checkbox-label {
-    color: var(--text, #14121d);
-  }
-
-  :root[data-theme="light"] .iris-checkbox-desc {
-    color: var(--text-2, #5f5975);
   }
 </style>
