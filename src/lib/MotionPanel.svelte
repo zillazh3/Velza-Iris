@@ -2,7 +2,7 @@
   import { onMount } from "svelte";
   import { ArrowLeftRight, OctagonX, Pause, Play, Repeat, RotateCw, Square } from "@lucide/svelte";
   import { api, type Motion, type MotionStatus, type TurnaroundProgress } from "$lib/api";
-  import { t, localizeMotionName, type Key } from "$lib/i18n/index.svelte";
+  import { t, localizeError, localizeMotionName, type Key } from "$lib/i18n/index.svelte";
 
   let { ready, run }: { ready: boolean; run: (action: () => Promise<unknown>, okText?: string) => Promise<void> } = $props();
 
@@ -46,7 +46,7 @@
   </div>
 
   {#if !ready}<p class="hint">{t("motion.needReady")}</p>{/if}
-  {#if status.error}<p class="error" role="alert">{status.error}</p>{/if}
+  {#if status.error}<p class="error" role="alert">{localizeError(status.error)}</p>{/if}
 
   {#if active}
     <div class="card controls" aria-live="polite">
@@ -115,7 +115,7 @@
       {#if turnaround}
         {#if turnaround.finished}
           <p class="progress">{t("turnaround.done", { done: turnaround.done, total: turnaround.total })}</p>
-          {#if turnaround.error}<p class="error" role="alert">{turnaround.error}</p>{/if}
+          {#if turnaround.error}<p class="error" role="alert">{localizeError(turnaround.error)}</p>{/if}
         {:else}
           <p class="progress">{t("turnaround.progress", { done: turnaround.done + 1, total: turnaround.total })}</p>
           <progress max={turnaround.total} value={turnaround.done}></progress>
