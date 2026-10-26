@@ -60,7 +60,7 @@
     type TrajectoryPreview,
     type Transition,
   } from "$lib/api";
-  import { t, pointLabel, formatKeyframeLabel, localizeError, localizeMotionName, type Key } from "$lib/i18n/index.svelte";
+  import { t, pointLabel, formatKeyframeLabel, localizeError, localizeMotionName, localizeReason, type Key } from "$lib/i18n/index.svelte";
   import {
     cinematicForProfile,
     createDefaultSequenceProject,
@@ -196,11 +196,11 @@
   ]);
 
   const transitionOptions = $derived<SelectOption<Transition>[]>([
-    { value: "linear", label: `${t("studio.trans.linear")} — Linear` },
-    { value: "smooth", label: `${t("studio.trans.smooth")} — Cosine In-Out` },
-    { value: "slowIn", label: `${t("studio.trans.slowIn")} — Cubic Ease-In` },
-    { value: "slowOut", label: `${t("studio.trans.slowOut")} — Cubic Ease-Out` },
-    { value: "smoothInOut", label: `${t("studio.trans.smoothInOut")} — Cubic S-Curve` },
+    { value: "linear", label: t("studio.trans.linear") },
+    { value: "smooth", label: t("studio.trans.smooth") },
+    { value: "slowIn", label: t("studio.trans.slowIn") },
+    { value: "slowOut", label: t("studio.trans.slowOut") },
+    { value: "smoothInOut", label: t("studio.trans.smoothInOut") },
   ]);
 
   const knotModeOptions = $derived<SelectOption<"passThrough" | "stop">[]>([
@@ -220,8 +220,8 @@
   ]);
 
   const targetSourceOptions = $derived<SelectOption<string>[]>([
-    { value: "calibratedAnchor", label: "Ojos del jugador (Ancla)" },
-    { value: "staticCalibratedPoint", label: "Punto 3D Estático" },
+    { value: "calibratedAnchor", label: t("studio.targetSource.anchorEyes") },
+    { value: "staticCalibratedPoint", label: t("studio.targetSource.staticPoint") },
     { value: "manualReference", label: t("studio.targetSource.manual") },
   ]);
 
@@ -352,6 +352,11 @@
     redoStack = [];
     evaluatedFrame = null;
     trajectoryPreview = null;
+  }
+
+  function effectName(kind: EffectKind) {
+    const entry = EFFECT_CATALOG.find((e) => e.kind === kind);
+    return entry ? t(entry.labelKey) : kind;
   }
 
   const fmtVec = (v: number[], digits = 2) => v.map((x) => x.toFixed(digits)).join("  ");
@@ -721,7 +726,7 @@
       };
       activeProject = { ...activeProject };
       await refreshMathPreview(false);
-    }, t("toast.pointUpdated", { label: selectedKeyframe.label }));
+    }, t("toast.pointUpdated", { label: formatKeyframeLabel(selectedKeyframe.label) }));
   }
 
   async function duplicateSelectedKeyframe() {
@@ -1106,14 +1111,14 @@
           },
         },
         {
-          label: `${t("studio.ctx.addEffectHere")} (Smooth Zoom)`,
+          label: `${t("studio.ctx.addEffectHere")} (${effectName("smoothZoom")})`,
           icon: Sparkles,
           action: () => {
             addEffectToTimeline("smoothZoom", clickTime, 0);
           },
         },
         {
-          label: `${t("studio.ctx.addEffectHere")} (Camera Drift)`,
+          label: `${t("studio.ctx.addEffectHere")} (${effectName("cameraDrift")})`,
           icon: Sparkles,
           action: () => {
             addEffectToTimeline("cameraDrift", clickTime, 1);
@@ -1200,7 +1205,7 @@
         type: "keyframe",
         data: structuredClone($state.snapshot(selectedKeyframe)),
       };
-      void run(async () => {}, t("toast.keyframeCopied", { label: selectedKeyframe.label }));
+      void run(async () => {}, t("toast.keyframeCopied", { label: formatKeyframeLabel(selectedKeyframe.label) }));
     } else if (selectedEffect) {
       const cat = EFFECT_CATALOG.find((c) => c.kind === selectedEffect.kind);
       const name = cat ? t(cat.labelKey) : selectedEffect.kind;
@@ -1235,7 +1240,7 @@
       selectedEffectId = null;
       playheadTime = copy.time;
       void refreshMathPreview(false);
-      void run(async () => {}, t("toast.keyframePasted", { label: copy.label, time: copy.time.toFixed(1) }));
+      void run(async () => {}, t("toast.keyframePasted", { label: formatKeyframeLabel(copy.label), time: copy.time.toFixed(1) }));
     } else if (studioClipboard.type === "effect") {
       const src = studioClipboard.data;
       let pasteStart = Math.round(playheadTime * 100) / 100;
@@ -1797,7 +1802,7 @@
   <!-- BARRA SUPERIOR DE PROYECTO Y SELECTOR [ CAPTURA | EDITOR ] -->
   <header class="studio-topbar card">
     <div class="project-controls">
-      <div class="seq-picker-wrap" title="Cambiar entre secuencias guardadas">
+      <div class="seq-picker-wrap" title={t("studio.switchSequenceTitle")}>
         <IrisSelect
           items={sequenceSelectOptions}
           value={activeProject.id}
@@ -2000,7 +2005,7 @@
             onchange={(val) => switchConfigUnit(val as DurationUnit)}
           />
         </div>
-        <div class="dur-preset-strip" title="Duraciones predeterminadas para acceso rápido">
+        <div class="dur-preset-strip" title={t("studio.config.quickDurations")}>
           {#each [5, 10, 15, 30, 60] as presetSec (presetSec)}
             <button
               type="button"
@@ -2305,7 +2310,8 @@
               <input
                 class="label-edit"
                 type="text"
-                bind:value={selectedKeyframe.label}
+                value={formatKeyframeLabel(selectedKeyframe.label)}
+                oninput={(e) => (selectedKeyframe.label = e.currentTarget.value)}
                 aria-label={t("studio.pointNameAria")}
               />
               <span class="badge">
@@ -2601,9 +2607,9 @@
                 {#if telemetry.certainty.kind === "measured"}
                   {t("studio.telemetry.measured", { seq: telemetry.certainty.seq, age: telemetry.certainty.ageMs })}
                 {:else if telemetry.certainty.kind === "estimated"}
-                  {t("studio.telemetry.estimated", { pct: Math.round(telemetry.certainty.confidence * 100), reason: telemetry.certainty.reason })}
+                  {t("studio.telemetry.estimated", { pct: Math.round(telemetry.certainty.confidence * 100), reason: localizeReason(telemetry.certainty.reason) })}
                 {:else}
-                  {t("studio.telemetry.openLoop", { reason: telemetry.certainty.reason })}
+                  {t("studio.telemetry.openLoop", { reason: localizeReason(telemetry.certainty.reason) })}
                 {/if}
                 {#if telemetry.posErrorM != null}
                   | Err: {(telemetry.posErrorM * 1000).toFixed(1)} mm / {(telemetry.rotErrorDeg ?? 0).toFixed(2)}°
@@ -2645,7 +2651,11 @@
               <div class="insp-row-two">
                 <label>
                   <span>{t("studio.labelField")}</span>
-                  <input type="text" bind:value={selectedKeyframe.label} />
+                  <input
+                    type="text"
+                    value={formatKeyframeLabel(selectedKeyframe.label)}
+                    oninput={(e) => (selectedKeyframe.label = e.currentTarget.value)}
+                  />
                 </label>
                 <label>
                   <span>{t("studio.timeSecField")}</span>
@@ -2765,7 +2775,7 @@
               {#if inspectorAccordion.optics}
                 <div class="insp-row-two">
                   <label>
-                    <span>Zoom (20–300 mm)</span>
+                    <span>{t("studio.zoomRange")}</span>
                     <input
                       type="number"
                       min="20"
@@ -2790,7 +2800,7 @@
                       min="-10"
                       max="4"
                       step="0.2"
-                      placeholder="Sin cambio"
+                      placeholder={t("studio.noChangePlaceholder")}
                       value={selectedKeyframe.look?.exposure ?? ""}
                       oninput={(e) => {
                         const val = e.currentTarget.value.trim();
@@ -2809,7 +2819,7 @@
                       min="0"
                       max="10"
                       step="0.1"
-                      placeholder="Sin cambio"
+                      placeholder={t("studio.noChangePlaceholder")}
                       value={selectedKeyframe.look?.focalDistance ?? ""}
                       oninput={(e) => {
                         const val = e.currentTarget.value.trim();
@@ -2828,7 +2838,7 @@
                       min="1.4"
                       max="32"
                       step="0.2"
-                      placeholder="Sin cambio"
+                      placeholder={t("studio.noChangePlaceholder")}
                       value={selectedKeyframe.look?.aperture ?? ""}
                       oninput={(e) => {
                         const val = e.currentTarget.value.trim();
@@ -3152,7 +3162,7 @@
 
               {#if telemetry && telemetry.log.length > 0}
                 <p class="local-readout">
-                  {t("studio.lastAdjustment", { reason: telemetry.log[telemetry.log.length - 1].reason })}
+                  {t("studio.lastAdjustment", { reason: localizeReason(telemetry.log[telemetry.log.length - 1].reason) })}
                 </p>
               {/if}
             {/if}
@@ -3289,7 +3299,7 @@
           </button>
 
           <!-- Barra de Transporte Completa Profesional -->
-          <div class="transport-nav-group" role="group" aria-label="Transport">
+          <div class="transport-nav-group" role="group" aria-label={t("studio.transport.label")}>
             <button
               type="button"
               class="ghost sm icon-only"
@@ -3387,7 +3397,7 @@
             variant="checkbox"
             size="sm"
             bind:checked={liveScrub}
-            label="Live Scrub OSC"
+            label={t("studio.liveScrubShort")}
             title={t("studio.liveScrubLabel")}
           />
 
@@ -3398,7 +3408,7 @@
             onclick={() => (snapEnabled = !snapEnabled)}
             title={t("studio.snapGrid")}
           >
-            <Magnet size={14} /> Snap
+            <Magnet size={14} /> {t("studio.snapShort")}
           </button>
 
           <label class="zoom-slider">
