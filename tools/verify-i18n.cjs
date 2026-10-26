@@ -97,7 +97,7 @@ if (unresolvableKeys === 0) {
 
 // 5. Escaneo de posibles textos en español incrustados en UI
 console.log('\n--- VERIFICANDO AUSENCIA DE TEXTOS EN ESPAÑOL HARDCODEADOS ---');
-const spanishWordRegex = /(?:Punto\s+[A-Z]|Ángulo|Inclinación|Desplazamiento|Recorrido|Suavizado\s+de|Duración\s+clip|Paso\s+continuo|Parada\s+suave|Sin\s+lectura\s+reciente|Inicializando\s+diagnóstico|Espacio\s+y\s+Objetivo|Modo\s+espacial|Re-vincular\s+puntos|Punto\s+estático\s+calibrado|Ancla\s+calibrada\s+del\s+jugador|Cargar\s+recorrido|Pista\s+FX\s+\d)/;
+const spanishWordRegex = /(?:Punto\s+[A-Z]|Ángulo|Inclinación|Desplazamiento|Recorrido|Suavizado\s+de|Duración\s+clip|Paso\s+continuo|Parada\s+suave|Sin\s+lectura\s+reciente|Inicializando\s+diagnóstico|Espacio\s+y\s+Objetivo|Modo\s+espacial|Re-vincular\s+puntos|Punto\s+estático\s+calibrado|Ancla\s+calibrada\s+del\s+jugador|Cargar\s+recorrido|Pista\s+FX\s+\d|Mostrar\s+gizmo|Apagar\s+gizmo|Ajuste\s+fino|Visualizador\s+VRChat|Estado\s+del\s+Sistema|Restablecer\s+ajuste)/;
 
 let rawLeaks = 0;
 for (const file of srcFiles) {
