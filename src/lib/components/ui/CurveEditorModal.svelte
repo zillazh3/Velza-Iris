@@ -187,16 +187,16 @@
           >
             <!-- Cuadrícula de referencia -->
             <rect x={PAD} y={PAD} width={PLOT_W} height={PLOT_H} fill="rgba(14, 10, 26, 0.45)" rx="8" />
-            <line x1={PAD} y1={PAD + PLOT_H} x2={PAD + PLOT_W} y2={PAD} stroke="rgba(184, 169, 255, 0.08)" stroke-dasharray="3 3" />
-            <line x1={PAD} y1={PAD + PLOT_H / 2} x2={PAD + PLOT_W} y2={PAD + PLOT_H / 2} stroke="rgba(184, 169, 255, 0.05)" />
-            <line x1={PAD + PLOT_W / 2} y1={PAD} x2={PAD + PLOT_W / 2} y2={PAD + PLOT_H} stroke="rgba(184, 169, 255, 0.05)" />
+            <line x1={PAD} y1={PAD + PLOT_H} x2={PAD + PLOT_W} y2={PAD} stroke="var(--border-subtle)" stroke-dasharray="3 3" />
+            <line x1={PAD} y1={PAD + PLOT_H / 2} x2={PAD + PLOT_W} y2={PAD + PLOT_H / 2} stroke="var(--border-subtle)" />
+            <line x1={PAD + PLOT_W / 2} y1={PAD} x2={PAD + PLOT_W / 2} y2={PAD + PLOT_H} stroke="var(--border-subtle)" />
 
             <!-- Líneas de las manijas de control P1 y P2 -->
-            <line x1={p0Svg.cx} y1={p0Svg.cy} x2={p1Svg.cx} y2={p1Svg.cy} stroke="#3d5afe" stroke-width="1.75" stroke-dasharray="2 2" />
-            <line x1={p3Svg.cx} y1={p3Svg.cy} x2={p2Svg.cx} y2={p2Svg.cy} stroke="#b8a9ff" stroke-width="1.75" stroke-dasharray="2 2" />
+            <line x1={p0Svg.cx} y1={p0Svg.cy} x2={p1Svg.cx} y2={p1Svg.cy} stroke="var(--accent)" stroke-width="1.75" stroke-dasharray="2 2" />
+            <line x1={p3Svg.cx} y1={p3Svg.cy} x2={p2Svg.cx} y2={p2Svg.cy} stroke="var(--text-2)" stroke-width="1.75" stroke-dasharray="2 2" />
 
             <!-- Curva Bézier -->
-            <path d={bezierPathD} fill="none" stroke="var(--accent, #3d5afe)" stroke-width="3.5" stroke-linecap="round" />
+            <path d={bezierPathD} fill="none" stroke="var(--accent)" stroke-width="3.5" stroke-linecap="round" />
 
             <!-- Anclas inicio y fin fijas -->
             <circle cx={p0Svg.cx} cy={p0Svg.cy} r="4.5" fill="#ffffff" />
@@ -208,7 +208,7 @@
               transform="translate({p1Svg.cx}, {p1Svg.cy})"
               onpointerdown={(e) => handlePointerDown("p1", e)}
             >
-              <circle r="9" fill="#3d5afe" stroke="#ffffff" stroke-width="2.5" />
+              <circle r="9" fill="var(--accent)" stroke="#ffffff" stroke-width="2.5" />
             </g>
 
             <!-- Manija interactiva P2 (Lavanda) -->
@@ -217,7 +217,7 @@
               transform="translate({p2Svg.cx}, {p2Svg.cy})"
               onpointerdown={(e) => handlePointerDown("p2", e)}
             >
-              <circle r="9" fill="#b8a9ff" stroke="#ffffff" stroke-width="2.5" />
+              <circle r="9" fill="var(--text-2)" stroke="#ffffff" stroke-width="2.5" />
             </g>
           </svg>
 
@@ -303,7 +303,7 @@
     position: fixed;
     inset: 0;
     z-index: 10001;
-    background: rgba(14, 10, 26, 0.75);
+    background: var(--surface);
     backdrop-filter: blur(8px);
     display: flex;
     align-items: center;
@@ -316,7 +316,6 @@
     width: 100%;
     max-width: 620px;
     background: var(--surface, #1a1230);
-    border: 1px solid var(--select-border, rgba(184, 169, 255, 0.2));
     border-radius: 18px;
     box-shadow:
       0 0 0 1px rgba(255, 255, 255, 0.08),
@@ -342,7 +341,7 @@
     align-items: center;
     justify-content: space-between;
     padding: 14px 18px;
-    border-bottom: 1px solid rgba(184, 169, 255, 0.1);
+    border-bottom: 1px solid var(--border-subtle);
   }
 
   .cm-title-wrap {
@@ -354,12 +353,12 @@
   .cm-title-wrap h3 {
     margin: 0;
     font-size: 0.95rem;
-    color: var(--text, #ece8ff);
+    color: var(--text);
     font-weight: 600;
   }
 
   :global(.accent-icon) {
-    color: var(--accent, #3d5afe);
+    color: var(--accent);
   }
 
   .icon-btn {
@@ -389,8 +388,7 @@
   .curve-svg {
     width: 100%;
     height: auto;
-    background: rgba(14, 10, 26, 0.6);
-    border: 1px solid rgba(184, 169, 255, 0.14);
+    background: var(--surface-raised);
     border-radius: 12px;
     user-select: none;
     touch-action: none;
@@ -414,14 +412,14 @@
 
   .sim-label {
     font-size: 0.72rem;
-    color: var(--text-2, #a59cc7);
+    color: var(--text-2);
     font-weight: 500;
   }
 
   .sim-rail {
     position: relative;
     height: 14px;
-    background: rgba(184, 169, 255, 0.12);
+    background: var(--surface-hover);
     border-radius: 999px;
     padding: 2px;
   }
@@ -432,8 +430,8 @@
     width: 10px;
     height: 10px;
     border-radius: 50%;
-    background: var(--accent, #3d5afe);
-    box-shadow: 0 0 8px var(--accent-glow, rgba(61, 90, 254, 0.45));
+    background: var(--accent);
+    box-shadow: 0 0 8px var(--accent-glow, rgba(var(--accent-color-rgb), 0.45));
     transform: translateX(-50%);
   }
 
@@ -455,19 +453,18 @@
     align-items: center;
     justify-content: space-between;
     gap: 6px;
-    background: rgba(14, 10, 26, 0.5);
-    border: 1px solid rgba(184, 169, 255, 0.14);
+    background: var(--surface-raised);
     border-radius: 8px;
     padding: 4px 8px;
     font-size: 0.76rem;
-    color: var(--text-2, #a59cc7);
+    color: var(--text-2);
   }
 
   .coord-field input {
     width: 60px;
     background: transparent;
     border: 0;
-    color: var(--text, #ece8ff);
+    color: var(--text);
     font-family: ui-monospace, SFMono-Regular, monospace;
     font-size: 0.78rem;
     text-align: right;
@@ -483,7 +480,7 @@
 
   .presets-title {
     font-size: 0.74rem;
-    color: var(--lavender, #b8a9ff);
+    color: var(--text-2));
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.04em;
@@ -503,8 +500,7 @@
     align-items: center;
     justify-content: space-between;
     padding: 6px 10px;
-    background: rgba(14, 10, 26, 0.45);
-    border: 1px solid rgba(184, 169, 255, 0.08);
+    background: var(--surface-raised);
     border-radius: 8px;
     cursor: pointer;
     text-align: left;
@@ -512,13 +508,11 @@
   }
 
   .preset-item:hover {
-    background: rgba(184, 169, 255, 0.08);
-    border-color: rgba(184, 169, 255, 0.2);
+    background: var(--surface-hover);
   }
 
   .preset-item.active {
-    background: var(--velvet, #2a1446);
-    border-color: var(--accent, #3d5afe);
+    background: var(--accent-subtle);
   }
 
   .preset-info {
@@ -529,19 +523,19 @@
 
   .preset-info strong {
     font-size: 0.78rem;
-    color: var(--text, #ece8ff);
+    color: var(--text);
   }
 
   .preset-info small {
     font-size: 0.68rem;
-    color: var(--text-2, #a59cc7);
+    color: var(--text-2);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
   }
 
   :global(.check-icon) {
-    color: var(--accent, #3d5afe);
+    color: var(--accent);
     flex-shrink: 0;
   }
 
@@ -550,60 +544,12 @@
     align-items: center;
     justify-content: space-between;
     padding: 12px 18px;
-    border-top: 1px solid rgba(184, 169, 255, 0.1);
-    background: rgba(14, 10, 26, 0.25);
+    border-top: 1px solid var(--border-subtle);
+    background: var(--surface-raised);
   }
 
   .cm-footer-right {
     display: flex;
     gap: 8px;
-  }
-
-  :global(:root[data-theme="light"]) .curve-modal-backdrop {
-    background: rgba(0, 0, 0, 0.4);
-  }
-  :global(:root[data-theme="light"]) .curve-modal {
-    background: #ffffff;
-    border-color: rgba(0, 0, 0, 0.1);
-    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.12);
-  }
-  :global(:root[data-theme="light"]) .cm-head {
-    border-bottom-color: rgba(0, 0, 0, 0.06);
-  }
-  :global(:root[data-theme="light"]) .cm-title-wrap h3 {
-    color: #12101a;
-  }
-  :global(:root[data-theme="light"]) .curve-svg {
-    background: #f5f4fa;
-    border-color: rgba(0, 0, 0, 0.08);
-  }
-  :global(:root[data-theme="light"]) .coord-field {
-    background: #f5f4fa;
-    border-color: rgba(0, 0, 0, 0.08);
-    color: #12101a;
-  }
-  :global(:root[data-theme="light"]) .coord-field input {
-    color: #12101a;
-  }
-  :global(:root[data-theme="light"]) .preset-item {
-    background: #f8f8fb;
-    border-color: rgba(0, 0, 0, 0.06);
-  }
-  :global(:root[data-theme="light"]) .preset-item:hover {
-    background: #eeeaf8;
-  }
-  :global(:root[data-theme="light"]) .preset-item.active {
-    background: #ebe6fa;
-    border-color: var(--accent);
-  }
-  :global(:root[data-theme="light"]) .preset-info strong {
-    color: #12101a;
-  }
-  :global(:root[data-theme="light"]) .preset-info small {
-    color: #66607d;
-  }
-  :global(:root[data-theme="light"]) .cm-footer {
-    background: #faf9fd;
-    border-top-color: rgba(0, 0, 0, 0.06);
   }
 </style>

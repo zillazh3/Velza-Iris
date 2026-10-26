@@ -170,7 +170,7 @@
     padding: 10px 14px;
     border: 1px solid #c85a7a;
     border-radius: 12px;
-    background: var(--velvet);
+    background: var(--surface-raised);
   }
   .controls {
     display: flex;
@@ -192,7 +192,7 @@
   }
   .state.on {
     color: var(--text);
-    border-color: var(--accent);
+    background: var(--accent-subtle);
   }
   .buttons {
     display: flex;
@@ -202,7 +202,7 @@
   }
   .pressed {
     color: var(--text);
-    border-color: var(--accent);
+    background: var(--accent-subtle);
   }
   .speed {
     display: inline-flex;

@@ -128,7 +128,6 @@
     background: var(--select-surface, rgba(26, 18, 44, 0.92));
     backdrop-filter: blur(20px) saturate(180%);
     -webkit-backdrop-filter: blur(20px) saturate(180%);
-    border: 1px solid var(--select-border, rgba(184, 169, 255, 0.18));
     border-radius: 12px;
     box-shadow:
       0 0 0 1px rgba(255, 255, 255, 0.08),
@@ -153,14 +152,6 @@
     }
   }
 
-  :root[data-theme="light"] .iris-ctx-menu {
-    background: rgba(255, 255, 255, 0.96);
-    border-color: rgba(0, 0, 0, 0.1);
-    box-shadow:
-      0 0 0 1px rgba(0, 0, 0, 0.06),
-      0 8px 24px -4px rgba(0, 0, 0, 0.12);
-  }
-
   .ctx-item {
     display: flex;
     align-items: center;
@@ -171,7 +162,7 @@
     background: transparent;
     border: 0;
     border-radius: 7px;
-    color: var(--text, #ece8ff);
+    color: var(--text);
     font-size: 0.8rem;
     font-weight: 500;
     cursor: pointer;
@@ -179,17 +170,9 @@
     transition: background 120ms ease, color 120ms ease;
   }
 
-  :root[data-theme="light"] .ctx-item {
-    color: #1a162b;
-  }
-
   .ctx-item:hover:not(:disabled) {
     background: var(--select-surface-hover, rgba(255, 255, 255, 0.08));
     color: var(--text, #ffffff);
-  }
-
-  :root[data-theme="light"] .ctx-item:hover:not(:disabled) {
-    background: rgba(0, 0, 0, 0.05);
   }
 
   .ctx-item.danger {
@@ -216,12 +199,8 @@
   .ctx-icon {
     display: inline-flex;
     align-items: center;
-    color: var(--lavender, #b8a9ff);
+    color: var(--text-2));
     flex-shrink: 0;
-  }
-
-  :root[data-theme="light"] .ctx-icon {
-    color: var(--royal, #3352ea);
   }
 
   .ctx-item.danger .ctx-icon {
@@ -237,7 +216,7 @@
   .ctx-shortcut {
     font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
     font-size: 0.7rem;
-    color: var(--text-2, #a59cc7);
+    color: var(--text-2);
     background: rgba(255, 255, 255, 0.06);
     border: 1px solid rgba(255, 255, 255, 0.08);
     border-radius: 4px;
@@ -245,19 +224,9 @@
     flex-shrink: 0;
   }
 
-  :root[data-theme="light"] .ctx-shortcut {
-    background: rgba(0, 0, 0, 0.04);
-    border-color: rgba(0, 0, 0, 0.08);
-    color: #645e77;
-  }
-
   .ctx-sep {
     height: 1px;
     margin: 4px 2px;
-    background: rgba(184, 169, 255, 0.12);
-  }
-
-  :root[data-theme="light"] .ctx-sep {
-    background: rgba(0, 0, 0, 0.08);
+    background: var(--surface-hover);
   }
 </style>
