@@ -20,7 +20,9 @@ fn main() {
         Some("send") => send(&a[1..]),
         Some("rate") => rate(&a[1..]),
         Some("latency") => latency(&a[1..]),
-        _ => Err("uso: probe tree [host:port] | listen [port] | send <addr> [args…] [--to host:port] | rate <hz> <secs> [radius] | latency [step_m]".into()),
+        Some("combo") => combo(&a[1..]),
+        Some("lag") => lag(&a[1..]),
+        _ => Err("uso: probe tree [host:port] | listen [port] | send <addr> [args…] [--to host:port] | rate <hz> <secs> [radius] | latency [step_m] | combo <secs> [avatar]".into()),
     };
     if let Err(e) = r {
         eprintln!("error: {e}");
@@ -318,6 +320,272 @@ fn latency(a: &[String]) -> Res<()> {
     send_to(&tx, VRC_SEND, "/usercamera/Pose", base.into_iter().map(OscType::Float).collect())
 }
 
+// ---------- combo ----------
+
+/// Canales ópticos barridos junto con la Pose: (endpoint, mínimo, máximo, periodo en s).
+const SWEEPS: &[(&str, f32, f32, f32)] = &[
+    ("Zoom", 25.0, 120.0, 3.0),
+    ("Exposure", -2.0, 2.0, 5.0),
+    ("FocalDistance", 0.5, 4.0, 4.0),
+    ("Aperture", 2.0, 16.0, 6.0),
+];
+
+/// Pose orbitando + barrido simultáneo de Zoom/Exposure/Focal/Aperture a 60 Hz (como la reproducción en vivo).
+/// Con `avatar` añade en paralelo `/avatar/parameters/iris_*` (cámara a 60 Hz + multiplexado de 5 huesos).
+/// Reporta por canal: enviados, ecos, último valor enviado vs. último eco y mayor desfase observado.
+fn combo(a: &[String]) -> Res<()> {
+    let secs: f64 = a.first().map_or(Ok(8.0), |s| s.parse())?;
+    let with_avatar = a.iter().any(|x| x == "avatar");
+    let rx = bind("9001")?;
+    type Stats = std::collections::HashMap<String, (usize, Option<f32>)>;
+    let pose: Arc<Mutex<Option<Vec<f32>>>> = Arc::default();
+    let echo: Arc<Mutex<Stats>> = Arc::default();
+    {
+        let (pose, echo) = (pose.clone(), echo.clone());
+        std::thread::spawn(move || {
+            recv_loop(&rx, |m| {
+                let Some(name) = m.addr.strip_prefix("/usercamera/") else { return };
+                if name == "Pose" {
+                    let v: Vec<f32> = m.args.iter().filter_map(|x| x.clone().float()).collect();
+                    *pose.lock().unwrap() = Some(v);
+                }
+                let val = m.args.first().and_then(|x| x.clone().float());
+                let mut e = echo.lock().unwrap();
+                let s = e.entry(name.to_string()).or_insert((0, None));
+                s.0 += 1;
+                s.1 = val.or(s.1);
+            })
+        });
+    }
+    println!("esperando una Pose de VRChat (mueve la cámara un poco, 15 s)…");
+    let t0 = Instant::now();
+    let base = loop {
+        if let Some(p) = pose.lock().unwrap().clone().filter(|p| p.len() >= 6) {
+            break p;
+        }
+        if t0.elapsed() > Duration::from_secs(15) {
+            return Err("no llegó /usercamera/Pose; ¿cámara abierta?".into());
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    println!("Pose recibida: SUELTA la cámara y no toques nada (inicia en 3 s)…");
+    std::thread::sleep(Duration::from_secs(3));
+    echo.lock().unwrap().clear();
+    let tx = Arc::new(UdpSocket::bind("127.0.0.1:0")?);
+    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let mux_cycles = Arc::new(AtomicUsize::new(0));
+    let mut handle = None;
+    if with_avatar {
+        send_to(&tx, VRC_SEND, "/avatar/parameters/iris_enable", vec![OscType::Bool(true)])?;
+        // Multiplexado del Path (mismos tiempos que avatar/service.rs) en un hilo aparte.
+        let (tx, stop, cyc) = (tx.clone(), stop.clone(), mux_cycles.clone());
+        handle = Some(std::thread::spawn(move || {
+            let int = |a: &str, v: i32| send_to(&tx, VRC_SEND, a, vec![OscType::Int(v)]);
+            let fl = |a: &str, v: f32| send_to(&tx, VRC_SEND, a, vec![OscType::Float(v)]);
+            while !stop.load(Ordering::Relaxed) {
+                let _ = int("/avatar/parameters/iris_wp_index", 0);
+                std::thread::sleep(Duration::from_millis(25));
+                for i in 1..=5 {
+                    for ax in ["x", "y", "z"] {
+                        let _ = fl(&format!("/avatar/parameters/iris_wp_{ax}"), i as f32 * 0.05);
+                    }
+                    std::thread::sleep(Duration::from_millis(30));
+                    let _ = int("/avatar/parameters/iris_wp_index", i);
+                    std::thread::sleep(Duration::from_millis(30));
+                    let _ = int("/avatar/parameters/iris_wp_index", 0);
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                cyc.fetch_add(1, Ordering::Relaxed);
+            }
+        }));
+    }
+
+    let period = Duration::from_secs_f64(1.0 / 60.0);
+    let n = (60.0 * secs) as u32;
+    let start = Instant::now();
+    let mut last_sent: std::collections::HashMap<&str, f32> = Default::default();
+    // Desfase máximo |eco - enviado| por canal (ignorando latencia: se compara con el valor enviado 3 frames antes).
+    let mut history: std::collections::HashMap<&str, Vec<f32>> = Default::default();
+    let mut max_lag: std::collections::HashMap<&str, f32> = Default::default();
+    for i in 0..n {
+        let deadline = start + period * i;
+        if let Some(d) = deadline.checked_duration_since(Instant::now()) {
+            if d > Duration::from_millis(2) {
+                std::thread::sleep(d - Duration::from_millis(2));
+            }
+        }
+        while Instant::now() < deadline {
+            std::hint::spin_loop();
+        }
+        let t = i as f32 / 60.0;
+        let ang = t * std::f32::consts::TAU / 4.0;
+        let mut p = base.clone();
+        p[0] += 0.3 * ang.sin();
+        p[2] += 0.3 * (ang.cos() - 1.0);
+        p[4] = (base[4] + t * 20.0) % 360.0;
+        send_to(&tx, VRC_SEND, "/usercamera/Pose", p.iter().copied().map(OscType::Float).collect())?;
+        for (name, lo, hi, per) in SWEEPS {
+            let v = lo + (hi - lo) * 0.5 * (1.0 + (t / per * std::f32::consts::TAU).sin());
+            send_to(&tx, VRC_SEND, &format!("/usercamera/{name}"), vec![OscType::Float(v)])?;
+            last_sent.insert(name, v);
+            let h = history.entry(name).or_default();
+            h.push(v);
+            if let Some((_, Some(e))) = echo.lock().unwrap().get(*name) {
+                // El eco debe coincidir con alguno de los últimos 12 valores enviados (≈200 ms de latencia).
+                let best = h.iter().rev().take(12).map(|s| (s - e).abs()).fold(f32::MAX, f32::min);
+                let m = max_lag.entry(name).or_insert(0.0);
+                *m = m.max(best);
+            }
+        }
+        if with_avatar {
+            for (k, v) in ["x", "y", "z"].iter().zip([0.1, 0.2, 0.3]) {
+                send_to(&tx, VRC_SEND, &format!("/avatar/parameters/iris_cam_{k}"), vec![OscType::Float(v * ang.sin())])?;
+            }
+            for (k, v) in ["rx", "ry", "rz"].iter().zip([0.0, ang.sin(), 0.0]) {
+                send_to(&tx, VRC_SEND, &format!("/avatar/parameters/iris_cam_{k}"), vec![OscType::Float(v)])?;
+            }
+        }
+    }
+    stop.store(true, Ordering::Relaxed);
+    if let Some(h) = handle {
+        let _ = h.join();
+    }
+    std::thread::sleep(Duration::from_millis(600));
+    println!("{n} frames a 60 Hz en {secs} s (avatar={with_avatar}, ciclos de multiplexado={})", mux_cycles.load(Ordering::Relaxed));
+    let e = echo.lock().unwrap();
+    for (name, ..) in SWEEPS {
+        let (cnt, val) = e.get(*name).copied().unwrap_or((0, None));
+        println!(
+            "  {name:<14} enviado_final={:>8.3} eco_final={:>8?} ecos={cnt:<5} desfase_max_vs_historial={:.3}",
+            last_sent[name],
+            val,
+            max_lag.get(name).copied().unwrap_or(f32::NAN)
+        );
+    }
+    println!("  Pose ecos={}", e.get("Pose").map_or(0, |s| s.0));
+    // Restaura valores neutros.
+    for (name, lo, hi, _) in SWEEPS {
+        send_to(&tx, VRC_SEND, &format!("/usercamera/{name}"), vec![OscType::Float((lo + hi) / 2.0)])?;
+    }
+    if with_avatar {
+        send_to(&tx, VRC_SEND, "/avatar/parameters/iris_enable", vec![OscType::Bool(false)])?;
+    }
+    send_to(&tx, VRC_SEND, "/usercamera/Pose", base.into_iter().map(OscType::Float).collect())
+}
+
+// ---------- lag ----------
+
+/// `lag <ep1,ep2,..> <hz> <secs>`: cada tick envía un valor único creciente a TODOS los endpoints (Pose = `pose`) y mide
+/// por endpoint cuánto tarda su eco. Revela colas internas de VRChat (retraso creciente = envío > capacidad de proceso).
+fn lag(a: &[String]) -> Res<()> {
+    let names: Vec<String> = a.first().ok_or("falta <ep1,ep2,…> (p.ej. Zoom,Exposure)")?.split(',').map(String::from).collect();
+    let hz: f64 = a.get(1).ok_or("falta <hz>")?.parse()?;
+    let secs: f64 = a.get(2).ok_or("falta <secs>")?.parse()?;
+    let div: usize = a.get(3).map_or(Ok(1), |s| s.parse())?; // sliders solo cada `div` ticks (Pose siempre)
+    let params = |n: &str| match n {
+        "Zoom" => (30.0f32, 0.01f32),
+        "Exposure" => (-4.0, 0.001),
+        "Aperture" => (2.0, 0.01),
+        _ => (0.5, 0.005),
+    };
+    let rx = bind("9001")?;
+    type Log = std::collections::HashMap<String, Vec<(Instant, f32)>>;
+    let echoes: Arc<Mutex<Log>> = Arc::default();
+    {
+        let echoes = echoes.clone();
+        std::thread::spawn(move || {
+            recv_loop(&rx, |m| {
+                let Some(n) = m.addr.strip_prefix("/usercamera/") else { return };
+                // Pose: se identifica por el campo X (índice 0); el resto por su único float.
+                if let Some(v) = m.args.first().and_then(|x| x.clone().float()) {
+                    echoes.lock().unwrap().entry(n.to_string()).or_default().push((Instant::now(), v));
+                }
+            })
+        });
+    }
+    let base_pose = if false {
+        println!("mueve la cámara para obtener Pose base…");
+        let t0 = Instant::now();
+        loop {
+            if let Some(v) = echoes.lock().unwrap().get("Pose").and_then(|v| v.last()).map(|x| x.1) {
+                let _ = v;
+                break;
+            }
+            if t0.elapsed() > Duration::from_secs(15) {
+                return Err("sin Pose".into());
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        echoes.lock().unwrap().clear();
+        Some(())
+    } else {
+        None
+    };
+    let _ = base_pose;
+    let tx = UdpSocket::bind("127.0.0.1:0")?;
+    let n = (hz * secs) as usize;
+    let period = Duration::from_secs_f64(1.0 / hz);
+    let start = Instant::now();
+    let mut sent_at: Vec<Instant> = Vec::with_capacity(n);
+    for i in 0..n {
+        let d = start + period * i as u32;
+        if let Some(w) = d.checked_duration_since(Instant::now()) {
+            if w > Duration::from_millis(2) {
+                std::thread::sleep(w - Duration::from_millis(2));
+            }
+        }
+        while Instant::now() < d {
+            std::hint::spin_loop();
+        }
+        sent_at.push(Instant::now());
+        for name in &names {
+            if name == "Pose" {
+                // X crece 0.001 m por tick: identificable; el resto fijo.
+                let args = [1.0 + 0.001 * i as f32, 1.6, 2.0 + 0.3 * (i as f32 / 60.0 * 1.5).sin(), 10.0 * (i as f32 / 30.0).sin(), (90.0 + i as f32 * 0.33) % 360.0, 0.0].map(OscType::Float).to_vec();
+                send_to(&tx, VRC_SEND, "/usercamera/Pose", args)?;
+            } else if i % div == 0 {
+                let (b, s) = params(name);
+                send_to(&tx, VRC_SEND, &format!("/usercamera/{name}"), vec![OscType::Float(b + s * i as f32)])?;
+            }
+        }
+    }
+    println!("{names:?}: {n} ticks a {hz} Hz; drenando ecos (hasta 30 s)…");
+    let (mut last, mut idle) = (0, Instant::now());
+    while idle.elapsed() < Duration::from_secs(4) && start.elapsed() < Duration::from_secs(30 + secs as u64) {
+        std::thread::sleep(Duration::from_millis(100));
+        let c: usize = echoes.lock().unwrap().values().map(Vec::len).sum();
+        if c != last {
+            last = c;
+            idle = Instant::now();
+        }
+    }
+    let e = echoes.lock().unwrap();
+    for name in &names {
+        let (b, s) = if name == "Pose" { (1.0, 0.001) } else { params(name) };
+        let mut seen = std::collections::HashMap::new();
+        for (t, v) in e.get(name.as_str()).map(Vec::as_slice).unwrap_or(&[]) {
+            seen.entry(((v - b) / s).round() as i64).or_insert(*t);
+        }
+        let mut lags: Vec<(usize, f64)> = (0..n)
+            .filter_map(|i| seen.get(&(i as i64)).map(|t| (i, t.duration_since(sent_at[i]).as_secs_f64() * 1e3)))
+            .collect();
+        let total = e.get(name.as_str()).map_or(0, Vec::len);
+        print!("  {name:<14} ecos={total:<5} únicos={:<4} perdidos={:<4}", lags.len(), n - lags.len());
+        if let (Some(&f), Some(&l)) = (lags.first(), lags.last()) {
+            let max = lags.iter().map(|x| x.1).fold(0.0, f64::max);
+            lags.sort_by(|x, y| x.1.total_cmp(&y.1));
+            print!(" retraso ms: primero={:.0} último={:.0} mediana={:.0} máx={max:.0}", f.1, l.1, lags[lags.len() / 2].1);
+        }
+        println!();
+    }
+    drop(e);
+    for (name, v) in [("Zoom", 45.0), ("Exposure", 0.0), ("FocalDistance", 1.5), ("Aperture", 15.0)] {
+        if names.iter().any(|x| x == name) {
+            send_to(&tx, VRC_SEND, &format!("/usercamera/{name}"), vec![OscType::Float(v)])?;
+        }
+    }
+    Ok(())
+}
 #[cfg(test)]
 mod tests {
     use super::*;
