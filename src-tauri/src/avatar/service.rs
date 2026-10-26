@@ -325,7 +325,7 @@ impl VisualizerService {
         }
     }
 
-    /// FLUJO A: Calibración del Sistema "Ancla" (`SetAnchor`).
+    /// Ancla arbitraria (solo pruebas y rigs con origen propio; el rig de producción usa el origen del mundo, ver `activate`).
     ///
     /// 1. Si estaba activo, envía iris_enable = false y iris_wp_index = 0, esperando 50 ms.
     /// 2. Captura anchorPosition.
@@ -340,11 +340,13 @@ impl VisualizerService {
             return Err("Ancla no finita (NaN o Inf)".into());
         }
 
-        // Si ya está activo NO se reconmuta `iris_enable`: eso soltaría y volvería a congelar `Iris_World_Root`, que
-        // saltaría a otro sitio y el mesh dejaría de coincidir con el gizmo sobre el que se calibró.
-        if !self.enabled.load(Ordering::SeqCst) {
-            sink(ADDR_IRIS_ENABLE.into(), vec![OscType::Bool(true)])?;
-            self.enabled.store(true, Ordering::SeqCst);
+        // NUNCA se apaga `iris_enable` aquí: soltaría y volvería a congelar `Iris_World_Root`, que saltaría a otro sitio
+        // y el mesh dejaría de coincidir con el gizmo sobre el que se calibró. Sí se REenvía `true`: si ya estaba
+        // encendido en VRChat es un no-op, y si el avatar se recargó (arranca en false) lo repara.
+        let was_enabled = self.enabled.load(Ordering::SeqCst);
+        sink(ADDR_IRIS_ENABLE.into(), vec![OscType::Bool(true)])?;
+        self.enabled.store(true, Ordering::SeqCst);
+        if !was_enabled {
             std::thread::sleep(Duration::from_millis(50));
         }
 
@@ -356,17 +358,21 @@ impl VisualizerService {
         Ok(anchor)
     }
 
-    /// FLUJO A (paso 1): muestra el gizmo en el origen de `Iris_World_Root` (cámara en 0,0,0) para que el usuario
-    /// encaje encima la cámara de VRChat; el ancla se confirma después con `set_anchor`. Idempotente.
+    /// Enciende el rig. `Iris_World_Root` vive en el ORIGEN DEL MUNDO (constraint con fuente fuera de la escena), así que
+    /// el ancla es siempre (0,0,0) con yaw 0: la pose de mundo de la cámara de VRChat es directamente la del gizmo, sin
+    /// calibrar y con la misma referencia para todos los clientes. El ajuste fino (`nudge`) se conserva.
+    /// Es una acción explícita: SIEMPRE reenvía (si el avatar se recargó, `iris_enable` volvió a false en VRChat
+    /// aunque la app siga creyendo que el rig está encendido).
     pub fn activate(
         &self,
         sink: Arc<dyn Fn(String, Vec<OscType>) -> Result<(), String> + Send + Sync>,
     ) -> Result<(), String> {
-        if self.enabled.load(Ordering::SeqCst) {
-            return Ok(());
-        }
         sink(ADDR_IRIS_ENABLE.into(), vec![OscType::Bool(true)])?;
         self.enabled.store(true, Ordering::SeqCst);
+        *self.anchor_position.lock().unwrap() = Some([0.0; 3]);
+        *self.anchor_yaw.lock().unwrap() = 0.0;
+        // Sin esto el siguiente eco de pose caería en el deadband y el gizmo se quedaría en 0 hasta que la cámara se mueva.
+        *self.last_cam_pose.lock().unwrap() = None;
         for addr in [ADDR_IRIS_CAM_X, ADDR_IRIS_CAM_Y, ADDR_IRIS_CAM_Z, ADDR_IRIS_CAM_RX, ADDR_IRIS_CAM_RY, ADDR_IRIS_CAM_RZ] {
             sink(addr.into(), vec![OscType::Float(0.0)])?;
         }
@@ -488,33 +494,67 @@ impl VisualizerService {
         Ok(())
     }
 
-    /// Muestrea la trayectoria matemática de Velza Iris en 5 puntos equidistantes en parámetro normalizado `t`:
-    /// `t_samples = [0.0, 0.25, 0.50, 0.75, 1.0]`
+    /// VRChat avisa con `/avatar/change` al cargar un avatar: los `iris_*` del avatar nuevo arrancan en sus defaults
+    /// (rig apagado, sin ancla), así que el estado de la app debe volver a "sin mostrar" para no creerlo encendido.
+    pub fn on_avatar_changed(&self) {
+        self.enabled.store(false, Ordering::SeqCst);
+        self.hide_cam.store(false, Ordering::SeqCst);
+        *self.anchor_position.lock().unwrap() = None;
+        *self.anchor_yaw.lock().unwrap() = 0.0;
+        *self.anchor_nudge.lock().unwrap() = ([0.0; 3], 0.0);
+        *self.last_cam_pose.lock().unwrap() = None;
+        self.diag.lock().unwrap().avatar_echo.clear();
+    }
+
+    /// Elige los 5 puntos del path de huesos a partir de los keyframes del proyecto (ver el cuerpo).
     pub fn sample_5_waypoints(
         project: &SequenceProject,
         active_anchor: Option<&Anchor>,
         fallback_anchor_pos: [f32; 3],
     ) -> [[f32; 3]; 5] {
         if project.keyframes.is_empty() {
-            // Fallback sintético en caso de secuencia sin keyframes: 5 puntos en línea recta frente al ancla
-            let mut def = [[0.0; 3]; 5];
-            for (i, p) in def.iter_mut().enumerate() {
-                let d = (i + 1) as f32 * 0.5;
-                *p = [fallback_anchor_pos[0], fallback_anchor_pos[1], fallback_anchor_pos[2] + d];
-            }
-            return def;
+            // Proyecto en blanco (p. ej. «Nueva secuencia»): sin recorrido. Los 5 huesos colapsan en el ancla (path de
+            // longitud cero) en vez de dibujar una línea inventada que parecería el recorrido del proyecto.
+            return [fallback_anchor_pos; 5];
         }
 
         let duration = project.duration.max(0.1);
-        let t_fractions = [0.0_f32, 0.25_f32, 0.50_f32, 0.75_f32, 1.0_f32];
-        let mut samples = [[0.0; 3]; 5];
+        let at = |t: f32| sample_base_pose_at(project, active_anchor, t.clamp(0.0, duration)).pos;
 
-        for (i, u) in t_fractions.iter().enumerate() {
-            let t = (*u * duration).clamp(0.0, duration);
-            let pose = sample_base_pose_at(project, active_anchor, t);
-            samples[i] = pose.pos;
+        // El path real tiene solo 5 huesos (polilínea recta entre ellos): se colocan sobre los KEYFRAMES del proyecto,
+        // no en fracciones fijas del tiempo (que casi nunca coinciden con los puntos y cortan las esquinas).
+        let mut times: Vec<f32> = project.keyframes.iter().map(|k| k.time.clamp(0.0, duration)).collect();
+        times.sort_by(|a, b| a.total_cmp(b));
+        times.dedup_by(|a, b| (*a - *b).abs() < 1e-3);
+        let n = times.len();
+        let mut pts: Vec<(f32, [f32; 3])> = if n <= 1 {
+            // Un solo punto: 5 muestras equidistantes en el tiempo.
+            [0.0_f32, 0.25, 0.5, 0.75, 1.0].iter().map(|u| (u * duration, at(u * duration))).collect()
+        } else if n > 5 {
+            // Más de 5 keyframes: primero, último y tres repartidos entre ellos (siguen siendo keyframes reales).
+            (0..5)
+                .map(|i| {
+                    let t = times[((i * (n - 1)) as f32 / 4.0).round() as usize];
+                    (t, at(t))
+                })
+                .collect()
+        } else {
+            times.iter().map(|&t| (t, at(t))).collect()
+        };
+        // Menos de 5 keyframes: se subdivide el tramo MÁS LARGO (en distancia) hasta completar los 5 huesos.
+        let dist = |a: [f32; 3], b: [f32; 3]| ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)).sqrt();
+        while pts.len() < 5 {
+            let j = (0..pts.len() - 1)
+                .max_by(|&a, &b| dist(pts[a].1, pts[a + 1].1).total_cmp(&dist(pts[b].1, pts[b + 1].1)).then(b.cmp(&a)))
+                .unwrap_or(0);
+            let t = (pts[j].0 + pts[j + 1].0) * 0.5;
+            pts.insert(j + 1, (t, at(t)));
         }
 
+        let mut samples = [[0.0; 3]; 5];
+        for (s, (_, p)) in samples.iter_mut().zip(pts) {
+            *s = p;
+        }
         samples
     }
 
@@ -527,7 +567,7 @@ impl VisualizerService {
     ) -> Result<(), String> {
         let anchor = self
             .anchor()
-            .ok_or("El Ancla no está calibrada; calibra primero antes de sincronizar el Path")?;
+            .ok_or("El rig está apagado; pulsa «Mostrar gizmo» antes de sincronizar el Path")?;
 
         let samples = Self::sample_5_waypoints(project, active_anchor, anchor.eye);
 

@@ -85,7 +85,7 @@
     try {
       await api.visualizerActivate();
       await pollVisualizerStatus();
-      message = { text: "Gizmo mostrado en el origen del rig: encaja encima la cámara de VRChat y confirma el ancla", ok: true };
+      message = { text: "Gizmo encendido: sigue a la cámara de VRChat sin calibrar", ok: true };
     } catch (e: any) {
       message = { text: String(e), ok: false };
     }
@@ -131,22 +131,11 @@
     }
   }
 
-  async function handleVisualizerSetAnchor() {
-    try {
-      await api.visualizerSetAnchor();
-      await api.visualizerSyncPath(activeProject);
-      await pollVisualizerStatus();
-      message = { text: "Ancla del Visualizador confirmada (posición + yaw de la cámara) y Path sincronizado", ok: true };
-    } catch (e: any) {
-      message = { text: String(e), ok: false };
-    }
-  }
-
   async function handleVisualizerResetAnchor() {
     try {
       await api.visualizerResetAnchor();
       await pollVisualizerStatus();
-      message = { text: "Ancla del Visualizador reseteada", ok: true };
+      message = { text: "Gizmo apagado", ok: true };
     } catch (e: any) {
       message = { text: String(e), ok: false };
     }
@@ -971,7 +960,7 @@
           <div class="card-head-avatar">
             <div>
               <h3>Visualizador VRChat (Avatars 3.0 / Unity)</h3>
-              <p class="sub">Rig de visualización de cámara y deformación de trayectoria de 5 huesos por OSC. «Calibrar ancla» solo muestra el gizmo: encaja la cámara de VRChat encima y pulsa «Confirmar ancla» aquí. Tras confirmar, quédate quieto para que los demás jugadores lo vean en el mismo sitio.</p>
+              <p class="sub">Rig de visualización de cámara y deformación de trayectoria de 5 huesos por OSC. «Mostrar gizmo» enciende el rig anclado al origen del mundo: el gizmo sigue a la cámara de VRChat sin calibrar y todos los jugadores lo ven en el mismo sitio. Si lo ves recorrido un poco, corrígelo con el ajuste fino. Al cambiar de avatar vuelve a pulsar «Mostrar gizmo».</p>
             </div>
             <span class="avatar-state-badge {visualizerSnapshot?.enabled ? 'ready' : 'idle'}">
               {visualizerSnapshot?.enabled ? "iris_enable = true" : "iris_enable = false"}
@@ -980,17 +969,17 @@
 
           <div class="diag-grid">
             <div>
-              <span class="diag-k">Ancla Visualizador (Mundo):</span>
+              <span class="diag-k">Anclaje del rig:</span>
               <code>
                 {#if visualizerSnapshot?.anchorPosition}
-                  [{visualizerSnapshot.anchorPosition[0].toFixed(2)}, {visualizerSnapshot.anchorPosition[1].toFixed(2)}, {visualizerSnapshot.anchorPosition[2].toFixed(2)}]m
-                  @ {visualizerSnapshot.anchorYaw?.toFixed(1) ?? "0.0"}° yaw
-                {:else if visualizerSnapshot?.enabled}
-                  Gizmo en el origen: encaja la cámara de VRChat y confirma
+                  Origen del mundo (sin calibrar)
                 {:else}
-                  Sin anclar (sigue cabeza)
+                  Apagado
                 {/if}
               </code>
+              {#if visualizerSnapshot?.lastCamNormalizedPos?.some((v) => Math.abs(v) >= 0.999)}
+                <code>⚠ La cámara está a más de 50 m del origen del mundo: el gizmo se queda en el límite.</code>
+              {/if}
             </div>
             <div>
               <span class="diag-k">Cámara OSC Normalizada (cam_x/y/z):</span>
@@ -1035,6 +1024,9 @@
                   ocupado {dg.skipped.busy}
                 </code>
                 {#if dg.lastError}<code>último error: {dg.lastError}</code>{/if}
+                {#if dg.poseEchoes === 0}
+                  <code>⚠ VRChat no ha enviado ninguna pose: revisa que OSC esté habilitado (Menú de acción → Opciones → OSC → Enabled) y la cámara abierta.</code>
+                {/if}
               </div>
               <div>
                 <span class="diag-k">Eco de VRChat (enviado → eco):</span>
@@ -1076,19 +1068,12 @@
             <div class="sim-buttons">
               <button
                 type="button"
-                class="btn-diag ghost"
-                disabled={!status.connected || visualizerSnapshot?.enabled}
-                onclick={handleVisualizerActivate}
-              >
-                1. Mostrar gizmo
-              </button>
-              <button
-                type="button"
                 class="btn-diag primary"
-                disabled={!status.connected || !status.open || status.camera?.rxAvailable === false}
-                onclick={handleVisualizerSetAnchor}
+                disabled={!status.connected}
+                onclick={handleVisualizerActivate}
+                title="Vuelve a mandar iris_enable = true: úsalo si recargaste el avatar y no ves el gizmo"
               >
-                2. Confirmar ancla (Flujo A)
+                {visualizerSnapshot?.enabled ? "Reenviar gizmo" : "Mostrar gizmo"}
               </button>
               <button type="button" class="btn-diag ghost" disabled={!status.connected} onclick={handleVisualizerToggleHide}>
                 {visualizerSnapshot?.hideCam ? "Mostrar en cámaras de VRChat" : "Ocultar de cámaras de VRChat"}
@@ -1097,7 +1082,7 @@
                 Sincronizar Path 5 Huesos (Flujo B)
               </button>
               <button type="button" class="btn-diag ghost" onclick={handleVisualizerResetAnchor}>
-                Resetear Ancla (Reset)
+                Apagar gizmo
               </button>
             </div>
           </div>

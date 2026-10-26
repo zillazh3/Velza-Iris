@@ -414,8 +414,6 @@ export const api = {
 
   // Visualizador OSC / Rig de Avatar (Avatars 3.0 / Unity)
   visualizerStatus: () => invoke<VisualizerSnapshot>("visualizer_status"),
-  visualizerSetAnchor: (anchorPos?: [number, number, number]) =>
-    invoke<[number, number, number]>("visualizer_set_anchor", { anchorPos }),
   visualizerActivate: () => invoke<void>("visualizer_activate"),
   visualizerSetHideCam: (hidden: boolean) => invoke<void>("visualizer_set_hide_cam", { hidden }),
   visualizerResetAnchor: () => invoke<void>("visualizer_reset_anchor"),

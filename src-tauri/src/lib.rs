@@ -59,7 +59,6 @@ pub fn run() {
             commands::visualizer_set_hide_cam,
             commands::visualizer_nudge,
             commands::visualizer_reset_nudge,
-            commands::visualizer_set_anchor,
             commands::visualizer_reset_anchor,
             commands::visualizer_sync_path,
             commands::visualizer_sync_camera

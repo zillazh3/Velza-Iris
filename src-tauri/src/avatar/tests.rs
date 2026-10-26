@@ -188,12 +188,15 @@ fn test_05_flow_a_set_and_reset_anchor() {
     assert_eq!(log1[0].0, ADDR_IRIS_ENABLE);
     assert_eq!(log1[0].1, vec![OscType::Bool(true)]);
 
-    // 2. Re-calibrar con el rig ya activo: NO se reconmuta iris_enable (soltaría y re-congelaría Iris_World_Root,
-    // que saltaría de sitio y dejaría de coincidir con el gizmo sobre el que se calibró).
+    // 2. Re-calibrar con el rig ya activo: NUNCA se apaga iris_enable (soltaría y re-congelaría Iris_World_Root,
+    // que saltaría de sitio y dejaría de coincidir con el gizmo sobre el que se calibró). Solo se REenvía `true`,
+    // que es un no-op en VRChat si ya estaba encendido y repara el caso en que el avatar se recargó (arranca en false).
     sent_log.lock().unwrap().clear();
     let new_anchor = Anchor { eye: [2.0, 1.7, 4.0], yaw: -45.0 };
     assert_eq!(service.set_anchor(new_anchor, sink.clone()).unwrap(), new_anchor);
-    assert!(sent_log.lock().unwrap().is_empty());
+    let log_re = sent_log.lock().unwrap().clone();
+    assert_eq!(log_re.len(), 1);
+    assert_eq!((log_re[0].0.as_str(), log_re[0].1.clone()), (ADDR_IRIS_ENABLE, vec![OscType::Bool(true)]));
     assert_eq!(service.anchor(), Some(new_anchor));
 
     // 3. Resetear Ancla
@@ -347,13 +350,15 @@ fn floats(msgs: &[rosc::OscMessage]) -> Vec<f32> {
 }
 
 #[test]
-fn test_09_activate_shows_gizmo_at_rig_origin_and_waits_for_anchor() {
+fn test_09_activate_shows_gizmo_anchored_at_the_world_origin() {
     let service = VisualizerService::new(VisualizerConfig::default());
     let (log, sink) = logging_sink();
 
+    assert_eq!(service.anchor(), None, "apagado: sin ancla");
     service.activate(sink.clone()).unwrap();
     assert!(service.enabled.load(std::sync::atomic::Ordering::SeqCst));
-    assert_eq!(service.anchor(), None);
+    // El rig vive en el origen del mundo: el ancla es (0,0,0) sin calibrar.
+    assert_eq!(service.anchor(), Some(Anchor { eye: [0.0; 3], yaw: 0.0 }));
     let l = log.lock().unwrap().clone();
     assert_eq!(l.len(), 7, "enable + 6 params de cámara en 0");
     assert_eq!((l[0].0.as_str(), l[0].1.clone()), (ADDR_IRIS_ENABLE, vec![OscType::Bool(true)]));
@@ -362,20 +367,26 @@ fn test_09_activate_shows_gizmo_at_rig_origin_and_waits_for_anchor() {
         assert_eq!(args, &vec![OscType::Float(0.0)]);
     }
 
-    // Idempotente
+    // Acción explícita del usuario: siempre reenvía (si el avatar se recargó, iris_enable volvió a false en VRChat
+    // aunque la app siga creyendo que está encendido).
     log.lock().unwrap().clear();
     service.activate(sink).unwrap();
-    assert!(log.lock().unwrap().is_empty());
+    assert_eq!(log.lock().unwrap().len(), 7);
 
-    // Sin ancla confirmada no se manda ninguna pose: sería relativa a un origen inventado (0,0,0 del mundo).
-    let sent = Arc::new(Mutex::new(0usize));
-    let s2 = sent.clone();
-    let frame_sink = move |m: Vec<rosc::OscMessage>| -> Result<(), String> {
-        *s2.lock().unwrap() += m.len();
-        Ok(())
-    };
-    service.sync_camera_frame(&Pose { pos: [5.0, 1.0, 5.0], rot: [0.0; 3] }, &frame_sink).unwrap();
-    assert_eq!(*sent.lock().unwrap(), 0);
+    // Sin calibrar: la pose de mundo de la cámara es directamente la del gizmo (5 m en x = 5/50 del rango).
+    let out = Arc::new(Mutex::new(vec![]));
+    let frame_sink = msgs_sink(out.clone());
+    service.sync_camera_frame(&Pose { pos: [5.0, 1.0, -5.0], rot: [0.0, 90.0, 0.0] }, &frame_sink).unwrap();
+    let v = floats(&out.lock().unwrap());
+    for (i, (got, exp)) in v.iter().zip([0.1, 0.02, -0.1, 0.0, 0.5, 0.0]).enumerate() {
+        assert!((got - exp).abs() < 1e-5, "param {i}: {got} != {exp}");
+    }
+
+    // Reenviar el gizmo (p. ej. tras recargar el avatar) vuelve a mandar la pose aunque la cámara no se haya movido.
+    out.lock().unwrap().clear();
+    service.activate(logging_sink().1).unwrap();
+    service.sync_camera_frame(&Pose { pos: [5.0, 1.0, -5.0], rot: [0.0, 90.0, 0.0] }, &frame_sink).unwrap();
+    assert_eq!(out.lock().unwrap().len(), 6);
 }
 
 #[test]
@@ -504,9 +515,7 @@ fn test_15_sync_outcomes_are_counted_with_their_skip_reason() {
     let pose = Pose { pos: [1.0, 0.0, 0.0], rot: [0.0; 3] };
 
     assert_eq!(service.sync_camera_frame(&pose, &ok_sink).unwrap(), SyncOutcome::Disabled);
-    service.activate(sink.clone()).unwrap();
-    assert_eq!(service.sync_camera_frame(&pose, &ok_sink).unwrap(), SyncOutcome::NoAnchor);
-    service.set_anchor(Anchor { eye: [0.0; 3], yaw: 0.0 }, sink).unwrap();
+    service.activate(sink).unwrap();
     assert_eq!(service.sync_camera_frame(&pose, &ok_sink).unwrap(), SyncOutcome::Sent);
     assert_eq!(service.sync_camera_frame(&pose, &ok_sink).unwrap(), SyncOutcome::Deadband);
 
@@ -518,7 +527,7 @@ fn test_15_sync_outcomes_are_counted_with_their_skip_reason() {
 
     let d = service.snapshot().diag;
     assert_eq!(d.frames_sent, 1);
-    assert_eq!((d.skipped.disabled, d.skipped.no_anchor, d.skipped.deadband), (1, 1, 1));
+    assert_eq!((d.skipped.disabled, d.skipped.no_anchor, d.skipped.deadband), (1, 0, 1));
     assert_eq!((d.skipped.busy, d.skipped.external_control), (1, 1));
     assert_eq!(d.pose_echoes, 1);
     assert_eq!(d.last_error.as_deref(), Some("cámara ocupada"));
@@ -577,4 +586,94 @@ fn test_17_avatar_parameter_echoes_from_vrchat_are_recorded() {
     echoes.sort_by(|a, b| a.name.cmp(&b.name));
     assert_eq!(echoes.iter().map(|e| (e.name.as_str(), e.value)).collect::<Vec<_>>(), vec![("iris_cam_x", 0.5), ("iris_enable", 1.0)]);
     assert!(echoes.iter().all(|e| e.age_ms < 5_000));
+}
+
+#[test]
+fn test_18_avatar_change_resets_the_rig_state_so_it_can_be_shown_again() {
+    let service = VisualizerService::new(local_config());
+    let (log, sink) = logging_sink();
+    service.set_anchor(Anchor { eye: [1.0, 2.0, 3.0], yaw: 40.0 }, sink.clone()).unwrap();
+    service.nudge([0.5, 0.0, 0.0], 5.0);
+    service.set_hide_cam(true, &*sink).unwrap();
+    service.note_avatar_echo("/avatar/parameters/iris_cam_x", 0.3);
+    assert!(service.snapshot().enabled);
+
+    // VRChat manda /avatar/change al cargar un avatar: los params iris_* del avatar nuevo arrancan en sus defaults.
+    service.on_avatar_changed();
+    let s = service.snapshot();
+    assert!(!s.enabled, "el rig del avatar nuevo está apagado");
+    assert_eq!((s.anchor_position, s.nudge_pos, s.nudge_yaw, s.hide_cam), (None, [0.0; 3], 0.0, false));
+    assert!(s.diag.avatar_echo.is_empty());
+
+    // Y mostrarlo otra vez vuelve a mandar iris_enable = true.
+    log.lock().unwrap().clear();
+    service.activate(sink).unwrap();
+    assert_eq!(log.lock().unwrap()[0].1, vec![OscType::Bool(true)]);
+    assert!(service.snapshot().enabled);
+}
+
+fn project_with(points: &[(f32, [f32; 3])], duration: f32) -> SequenceProject {
+    let mut p = SequenceProject::new("p", "P", duration);
+    for (i, (time, pos)) in points.iter().enumerate() {
+        p.keyframes.push(Keyframe {
+            id: format!("k{i}"),
+            label: format!("k{i}"),
+            time: *time,
+            raw_pose: Pose { pos: *pos, rot: [0.0; 3] },
+            local_pose: None,
+            captured_at_ms: 0,
+            transition: crate::studio::model::Transition::Linear,
+            custom_curve: None,
+            knot_mode: crate::studio::model::KnotMode::PassThrough,
+            look: crate::studio::model::LookTrackPoint::default(),
+        });
+    }
+    p
+}
+
+fn near(a: [f32; 3], b: [f32; 3]) -> bool {
+    (0..3).all(|i| (a[i] - b[i]).abs() < 0.05)
+}
+
+#[test]
+fn test_19_path_passes_through_the_keyframes_when_there_are_five_or_fewer() {
+    // Keyframes en t = 0, 1.5 y 4 s: el 25/50/75 % del tiempo (1, 2, 3 s) no cae sobre el del medio.
+    let kfs = [(0.0, [0.0, 1.0, 0.0]), (1.5, [10.0, 1.0, 5.0]), (4.0, [20.0, 3.0, -5.0])];
+    let samples = VisualizerService::sample_5_waypoints(&project_with(&kfs, 4.0), None, [0.0; 3]);
+    for (t, pos) in kfs {
+        assert!(samples.iter().any(|s| near(*s, pos)), "el path debe pasar por el keyframe t={t} {pos:?}: {samples:?}");
+    }
+    // Primer y último hueso en los extremos del recorrido, y los 5 en orden temporal (sin retroceder en X).
+    assert!(near(samples[0], kfs[0].1) && near(samples[4], kfs[2].1));
+    assert!(samples.windows(2).all(|w| w[1][0] >= w[0][0] - 0.05));
+}
+
+#[test]
+fn test_20_path_with_many_keyframes_keeps_first_last_and_uses_real_keyframes() {
+    let kfs: Vec<(f32, [f32; 3])> = (0..8).map(|i| (i as f32, [i as f32 * 3.0, 1.0, (i % 2) as f32 * 4.0])).collect();
+    let samples = VisualizerService::sample_5_waypoints(&project_with(&kfs, 7.0), None, [0.0; 3]);
+    assert!(near(samples[0], kfs[0].1) && near(samples[4], kfs[7].1));
+    // Los 5 huesos caen sobre keyframes reales (no sobre puntos intermedios que cortan las esquinas del zigzag).
+    for s in samples {
+        assert!(kfs.iter().any(|(_, p)| near(s, *p)), "{s:?} no es un keyframe");
+    }
+    let distinct = samples.iter().enumerate().filter(|(i, s)| samples[..*i].iter().all(|o| !near(**s, *o))).count();
+    assert_eq!(distinct, 5, "los 5 huesos deben ser puntos distintos");
+}
+
+#[test]
+fn test_21_path_with_two_keyframes_spreads_five_points_along_the_segment() {
+    let kfs = [(0.0, [0.0, 0.0, 0.0]), (2.0, [8.0, 0.0, 0.0])];
+    let samples = VisualizerService::sample_5_waypoints(&project_with(&kfs, 2.0), None, [0.0; 3]);
+    for (i, want) in [0.0_f32, 2.0, 4.0, 6.0, 8.0].iter().enumerate() {
+        assert!((samples[i][0] - want).abs() < 0.05, "hueso {i}: x = {} (esperado {want})", samples[i][0]);
+    }
+}
+
+#[test]
+fn test_22_blank_project_collapses_the_path_onto_the_anchor() {
+    let blank = SequenceProject::new("b", "Nueva secuencia", 10.0);
+    let anchor = [3.0, 1.5, -2.0];
+    let samples = VisualizerService::sample_5_waypoints(&blank, None, anchor);
+    assert!(samples.iter().all(|p| *p == anchor), "un proyecto vacío no debe dibujar un recorrido inventado: {samples:?}");
 }
