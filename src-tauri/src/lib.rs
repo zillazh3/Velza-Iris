@@ -2,6 +2,7 @@ pub mod anchor;
 pub mod avatar;
 pub mod camera;
 mod commands;
+pub mod logbus;
 pub mod motion;
 pub mod osc;
 pub mod presets;
@@ -61,7 +62,8 @@ pub fn run() {
             commands::visualizer_reset_nudge,
             commands::visualizer_reset_anchor,
             commands::visualizer_sync_path,
-            commands::visualizer_sync_camera
+            commands::visualizer_sync_camera,
+            commands::logs_since
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

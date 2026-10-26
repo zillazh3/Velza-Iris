@@ -54,6 +54,7 @@ impl Osc {
                             }
                             Err(e) => {
                                 eprintln!("[OSC] Error en recepción UDP puerto {}: {}", listen_port, e);
+                                crate::logbus::error("osc/rx", format!("UDP {listen_port}: {e}"));
                                 std::thread::sleep(std::time::Duration::from_millis(10));
                                 continue;
                             }
@@ -61,13 +62,17 @@ impl Osc {
                         let Ok((_, pkt)) = decoder::decode_udp(&buf[..n]) else { continue };
                         let mut msgs = Vec::new();
                         flatten(pkt, &mut msgs);
-                        msgs.into_iter().for_each(&mut on_msg);
+                        for m in msgs {
+                            crate::logbus::osc_in(&m);
+                            on_msg(m);
+                        }
                     }
                 });
                 true
             }
             Err(e) => {
                 eprintln!("[OSC] No se pudo enlazar socket de recepción en 127.0.0.1:{} ({}); operando en lazo abierto.", listen_port, e);
+                crate::logbus::error("osc/rx", format!("no se pudo enlazar 127.0.0.1:{listen_port} ({e}); lazo abierto"));
                 false
             }
         };
@@ -80,8 +85,7 @@ impl Osc {
     }
 
     fn send(&self, addr: String, args: Vec<rosc::OscType>) -> Result<(), String> {
-        let bytes = encoder::encode(&OscPacket::Message(OscMessage { addr, args })).map_err(|e| e.to_string())?;
-        self.tx.send_to(&bytes, self.target).map(drop).map_err(|e| e.to_string())
+        self.send_packet(&OscPacket::Message(OscMessage { addr, args }))
     }
 
     /// Envío directo de un paquete OSC sin conversión de protocolo de cámara.
@@ -92,7 +96,12 @@ impl Osc {
     /// Envío directo de un paquete OSC (Message o Bundle) codificado.
     pub fn send_packet(&self, packet: &OscPacket) -> Result<(), String> {
         let bytes = encoder::encode(packet).map_err(|e| e.to_string())?;
-        self.tx.send_to(&bytes, self.target).map(drop).map_err(|e| e.to_string())
+        let sent = self.tx.send_to(&bytes, self.target).map(drop).map_err(|e| e.to_string());
+        match &sent {
+            Ok(()) => crate::logbus::osc_out_packet(packet),
+            Err(e) => crate::logbus::error("osc/tx", e.clone()),
+        }
+        sent
     }
 
     /// Envío atómico de múltiples mensajes OSC dentro de un mismo OSC Bundle.

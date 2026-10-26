@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import type { LogBatch } from "$lib/logs";
 
 export type Pose = {
   pos: [number, number, number];
@@ -428,6 +429,7 @@ export const api = {
   visualizerSyncCamera: (pose: Pose) =>
     invoke<void>("visualizer_sync_camera", { pose }),
   avatarStatus: () => invoke<VisualizerSnapshot>("visualizer_status"),
+  logsSince: (cursor: number) => invoke<LogBatch>("logs_since", { cursor }),
   fitKeyframesToDuration: (project: SequenceProject, targetDuration: number) =>
     invoke<SequenceProject>("fit_keyframes_to_duration", { project, targetDuration }),
   sampleBasePoseAt: (project: SequenceProject, time: number) =>

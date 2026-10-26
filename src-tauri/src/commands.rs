@@ -3,6 +3,7 @@ use crate::anchor::{Anchor, AnchorManager, AnchorSnapshot};
 use crate::avatar::config::VisualizerConfig;
 use crate::avatar::service::{SkipReason, VisualizerService, VisualizerSnapshot};
 use crate::camera::{now_epoch_ms, Camera, CameraOscEvent, CameraSnapshot, Change, DEFAULTS};
+use crate::logbus;
 use crate::motion::runner::{Cmd, Output, PlayState, Runner};
 use crate::motion::sample::{motions, Motion};
 use crate::motion::turnaround::{self, Action, Progress, Timing, Turnaround};
@@ -185,6 +186,7 @@ fn reapply(app: AppHandle) {
             && let Err(e) = st.apply(&p)
         {
             eprintln!("no pude reaplicar '{}': {e}", p.name);
+            logbus::error("engine/preset", format!("no pude reaplicar '{}': {e}", p.name));
         }
     });
 }
@@ -284,7 +286,14 @@ pub async fn connect(app: AppHandle, st: State<'_, App>) -> Result<(), String> {
         },
     )?;
     *st.camera.lock().unwrap() = Some(cam);
+    logbus::engine("engine/connect", format!("OSC hacia {target} · escucha UDP {}", crate::osc::DEFAULT_LISTEN_PORT));
     Ok(())
+}
+
+/// Entradas del bus de logs posteriores a `cursor` (0 = desde el principio del anillo).
+#[tauri::command]
+pub fn logs_since(cursor: u64) -> logbus::LogBatch {
+    logbus::since(cursor)
 }
 
 #[tauri::command]
@@ -294,6 +303,8 @@ pub fn status(st: State<App>) -> Status {
     let camera = cam_guard.as_ref().map(|c| c.state.lock().unwrap().snapshot());
     let open = camera.as_ref().is_some_and(|s| s.open);
     drop(cam_guard);
+    logbus::edge("connected", connected, "engine/status", "VRChat conectado", "VRChat desconectado");
+    logbus::edge("camera_open", open, "engine/status", "cámara abierta", "cámara cerrada");
     let anchor_state = st.anchor_snapshot();
     let anchor = anchor_state.anchor;
     Status {
@@ -309,6 +320,15 @@ pub fn status(st: State<App>) -> Status {
 /// Toma la pose actual de la cámara (cerca de la cara, mirando al frente) como origen de los presets y clava el Ancla del Visualizador.
 #[tauri::command]
 pub fn calibrate(st: State<App>) -> Result<(), String> {
+    let r = calibrate_inner(&st);
+    match &r {
+        Ok(()) => logbus::engine("engine/calibrate", "ancla calibrada"),
+        Err(e) => logbus::error("engine/calibrate", e.clone()),
+    }
+    r
+}
+
+fn calibrate_inner(st: &State<App>) -> Result<(), String> {
     let snap = {
         let cam = st.camera.lock().unwrap();
         let cam = cam.as_ref().ok_or("sin conexión con VRChat")?;
@@ -358,6 +378,15 @@ pub fn calibrate(st: State<App>) -> Result<(), String> {
 /// Devuelve las opciones de la cámara a los valores por defecto de VRChat y olvida el último preset.
 #[tauri::command]
 pub fn reset_defaults(st: State<App>) -> Result<(), String> {
+    let r = reset_defaults_inner(&st);
+    match &r {
+        Ok(()) => logbus::engine("engine/reset", "opciones de cámara restablecidas"),
+        Err(e) => logbus::error("engine/reset", e.clone()),
+    }
+    r
+}
+
+fn reset_defaults_inner(st: &State<App>) -> Result<(), String> {
     st.halt();
     {
         let cam_arc = st.camera.clone();
@@ -871,7 +900,16 @@ pub fn play_sequence(
     app: AppHandle,
     st: State<App>,
 ) -> Result<(), String> {
-    play_sequence_internal(&app, &st, project, start_time, looping, live_osc)
+    let name = project.name.clone();
+    let r = play_sequence_internal(&app, &st, project, start_time, looping, live_osc);
+    match &r {
+        Ok(()) => logbus::engine(
+            "engine/studio",
+            format!("reproduciendo «{name}» desde {start_time:.2} s ({})", if live_osc { "en vivo" } else { "vista previa" }),
+        ),
+        Err(e) => logbus::error("engine/studio", e.clone()),
+    }
+    r
 }
 
 #[tauri::command]
@@ -905,6 +943,7 @@ pub fn studio_status(st: State<App>) -> StudioPlaybackStatus {
 
 #[tauri::command]
 pub fn stop_studio(st: State<App>) {
+    logbus::engine("engine/studio", "reproducción detenida");
     *st.studio_runner.lock().unwrap() = None;
     st.anchor_mgr.lock().unwrap().set_external_control_active(false);
 }

@@ -211,6 +211,7 @@ fn run_loop(
             }
             // `flush` = último frame (fin del recorrido): los canales con pacing envían el valor exacto sin esperar.
             if let Err(e) = sink(&frame, live_osc, state == PlayState::Stopped) {
+                crate::logbus::error("engine/studio", e.clone());
                 error = Some(e);
                 state = PlayState::Stopped;
             }
