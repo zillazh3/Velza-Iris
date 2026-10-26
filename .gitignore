@@ -8,3 +8,5 @@ src-tauri/gen/
 VelzaIris-data/
 .env
 .env.*
+CLAUDE.md
+.claude/
