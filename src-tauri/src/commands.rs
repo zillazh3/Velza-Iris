@@ -843,7 +843,8 @@ pub fn play_sequence_internal(
         let app_st = app_clone.state::<App>();
         if app_st.visualizer.enabled.load(Ordering::Relaxed) {
             let cam_arc = app_st.camera.clone();
-            let _ = app_st.visualizer.sync_camera_frame(&pose_to_send, &move |msgs| {
+            // Dueño: pose exacta por parámetros locales. Remotos: solo `iris_path_t` (≤ 10 Hz) sobre los puntos de control.
+            let _ = app_st.visualizer.sync_playback(&pose_to_send, ev.time, ev.base_pose.pos, &move |msgs| {
                 let guard = cam_arc.lock().unwrap();
                 let c = guard.as_ref().ok_or("Sin conexión con VRChat")?;
                 for msg in msgs {

@@ -342,6 +342,8 @@ export type VisualizerSnapshot = {
   nudgePos: [number, number, number];
   nudgeYaw: number;
   diag: VizDiag;
+  /** Qué ven los remotos: "path" (siguen Path_T) o "hand" (pose retenida). */
+  netMode: string;
 };
 
 export type VizDiag = {

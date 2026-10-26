@@ -960,7 +960,7 @@
           <div class="card-head-avatar">
             <div>
               <h3>Visualizador VRChat (Avatars 3.0 / Unity)</h3>
-              <p class="sub">Rig de visualización de cámara y deformación de trayectoria de 5 huesos por OSC. «Mostrar gizmo» enciende el rig anclado al origen del mundo: el gizmo sigue a la cámara de VRChat sin calibrar y todos los jugadores lo ven en el mismo sitio. Si lo ves recorrido un poco, corrígelo con el ajuste fino. Al cambiar de avatar vuelve a pulsar «Mostrar gizmo».</p>
+              <p class="sub">Rig de visualización de cámara y deformación de trayectoria de 5 huesos por OSC. «Mostrar gizmo» enciende el rig en el mundo: el gizmo sigue a la cámara de VRChat sin calibrar. Tú ves la pose y el path exactos al instante; los demás jugadores reciben el path de 8 puntos por el bus de red (~12 s la primera vez) y ven el recorrido interpolado y suavizado. Si lo ves corrido un poco, corrígelo con el ajuste fino. Al cambiar de avatar vuelve a pulsar «Mostrar gizmo».</p>
             </div>
             <span class="avatar-state-badge {visualizerSnapshot?.enabled ? 'ready' : 'idle'}">
               {visualizerSnapshot?.enabled ? "iris_enable = true" : "iris_enable = false"}
@@ -969,17 +969,14 @@
 
           <div class="diag-grid">
             <div>
-              <span class="diag-k">Anclaje del rig:</span>
+              <span class="diag-k">Región del rig (centro, mundo):</span>
               <code>
                 {#if visualizerSnapshot?.anchorPosition}
-                  Origen del mundo (sin calibrar)
+                  [{visualizerSnapshot.anchorPosition.map((v) => v.toFixed(1)).join(", ")}] m · remotos: {visualizerSnapshot.netMode === "path" ? "siguen el recorrido" : "pose retenida"}
                 {:else}
                   Apagado
                 {/if}
               </code>
-              {#if visualizerSnapshot?.lastCamNormalizedPos?.some((v) => Math.abs(v) >= 0.999)}
-                <code>⚠ La cámara está a más de 50 m del origen del mundo: el gizmo se queda en el límite.</code>
-              {/if}
             </div>
             <div>
               <span class="diag-k">Cámara OSC Normalizada (cam_x/y/z):</span>
@@ -1002,9 +999,9 @@
               </code>
             </div>
             <div>
-              <span class="diag-k">Multiplexor de 5 Huesos (Path):</span>
+              <span class="diag-k">Bus de red hacia los remotos (path de 8 puntos):</span>
               <code>
-                {visualizerSnapshot?.isSyncingPath ? "Sincronizando (los params synced tardan ~3 s)..." : "Listo (iris_wp_index = 0)"}
+                {visualizerSnapshot?.isSyncingPath ? "Enviando a los demás jugadores (~12 s; tú lo ves al instante)..." : "Listo"}
               </code>
             </div>
             <div>
