@@ -96,6 +96,7 @@
   import CurveEditorModal, { type BezierCurve } from "$lib/components/ui/CurveEditorModal.svelte";
   import KeybindingsModal from "$lib/components/ui/KeybindingsModal.svelte";
   import KeyframeQuickEditor from "$lib/studio/KeyframeQuickEditor.svelte";
+  import AxisInput from "$lib/studio/AxisInput.svelte";
   import ProjectModal, { type ProjectDraft } from "$lib/studio/ProjectModal.svelte";
   import { shortcutManager } from "$lib/shortcuts/shortcuts.svelte";
 
@@ -351,6 +352,29 @@
     redoStack = [];
     evaluatedFrame = null;
     trajectoryPreview = null;
+  }
+
+  const fmtVec = (v: number[], digits = 2) => v.map((x) => x.toFixed(digits)).join("  ");
+
+  /** "Punto A" / "Point A" -> "A"; etiquetas propias -> sus 2 primeras letras. */
+  function shortLabel(label: string | null | undefined) {
+    const raw = formatKeyframeLabel(label).trim();
+    const m = raw.match(/^(?:Punto|Point)\s+(\S+)$/i);
+    return m ? m[1] : raw.slice(0, 2);
+  }
+
+  function opticLabel(kf: Keyframe) {
+    const parts: string[] = [];
+    if (kf.look?.zoom != null) parts.push(`${kf.look.zoom}mm`);
+    if (kf.look?.aperture != null) parts.push(`f/${kf.look.aperture}`);
+    if (kf.look?.focalDistance != null) parts.push(`${kf.look.focalDistance}m`);
+    return parts.join(" ");
+  }
+
+  function certaintyLabel(c: TelemetryReport["certainty"]) {
+    if (c.kind === "measured") return t("studio.tele.measured");
+    if (c.kind === "estimated") return t("studio.tele.estimated", { pct: Math.round(c.confidence * 100) });
+    return t("studio.tele.openLoop");
   }
 
   function applyCinematicProfile(profile: CinematicProfile) {
@@ -2208,8 +2232,8 @@
                   oncontextmenu={(e) => openKeyframeContextMenu(kf, e)}
                 >
                   <span class="kf-dot"></span>
-                  <span>{formatKeyframeLabel(kf.label)}</span>
-                  <small>{kf.time.toFixed(1)}s</small>
+                  <span class="kf-short">{shortLabel(kf.label)}</span>
+                  <span class="kf-full">{formatKeyframeLabel(kf.label)} · {kf.time.toFixed(1)}s</span>
                 </button>
               {/each}
             </div>
@@ -2516,8 +2540,30 @@
           onUpdateKeyframePos={updateKeyframePos}
         />
 
-        <!-- Telemetría que diferencia Pose Recibida (VRChat), Pose Relativa (Ancla) y Pose Evaluada/Enviada -->
-        <div class="telemetry-bar card">
+        <!-- Barra de estado de una línea; el detalle comparativo (VRChat / base / final / feedback) va en el desplegable -->
+        <div class="status-strip">
+          <span class="tone" class:ok={Boolean(status.camera?.poseFresh)}>
+            <i class="dot"></i>{t(status.camera?.poseFresh ? "status.poseFresh" : "status.poseStale")}
+          </span>
+          {#if evaluatedFrame}
+            <span class="kv"><b>XYZ</b>{fmtVec(evaluatedFrame.finalPose.pos)}</span>
+            <span class="kv"><b>PYR</b>{fmtVec(evaluatedFrame.finalPose.rot, 0)}°</span>
+            <span class="kv"><b>f</b>{(evaluatedFrame.zoom ?? 45).toFixed(0)} mm</span>
+            <span class="kv"><b>v</b>{(evaluatedFrame.linearSpeedMps ?? 0).toFixed(2)} m/s</span>
+          {/if}
+          {#if telemetry}
+            <span
+              class="tone"
+              class:ok={telemetry.certainty.kind === "measured"}
+              class:warn={telemetry.certainty.kind === "estimated"}
+            >
+              <i class="dot"></i>{certaintyLabel(telemetry.certainty)}{#if telemetry.posErrorM != null}
+                · {(telemetry.posErrorM * 1000).toFixed(1)} mm{/if}
+            </span>
+          {/if}
+          <details class="tele-more">
+            <summary>{t("studio.tele.details")}</summary>
+            <div class="tele-grid">
           <div class="tele-col">
             <span class="tele-label vrc">{t("studio.telemetry1")}</span>
             {#if status.camera?.poseFresh && status.camera.pose}
@@ -2567,6 +2613,8 @@
               <code class="muted">{t("studio.initDiag")}</code>
             {/if}
           </div>
+            </div>
+          </details>
         </div>
       </section>
 
@@ -2663,16 +2711,14 @@
               </button>
               {#if inspectorAccordion.pos}
                 <div class="xyz-grid">
-                  {#each ["X", "Y", "Z"] as axis, i (axis)}
-                    <label>
-                      <span>{axis}</span>
-                      <input
-                        type="number"
-                        step="0.05"
-                        bind:value={selectedKeyframe.rawPose.pos[i]}
-                        oninput={() => refreshMathPreview(liveScrub)}
-                      />
-                    </label>
+                  {#each ["x", "y", "z"] as const as axis, i (axis)}
+                    <AxisInput
+                      label={axis.toUpperCase()}
+                      {axis}
+                      step={0.05}
+                      bind:value={selectedKeyframe.rawPose.pos[i]}
+                      oninput={() => refreshMathPreview(liveScrub)}
+                    />
                   {/each}
                 </div>
               {/if}
@@ -2688,16 +2734,15 @@
               </button>
               {#if inspectorAccordion.rot}
                 <div class="xyz-grid">
-                  {#each ["Pitch", "Yaw", "Roll"] as axis, i (axis)}
-                    <label>
-                      <span>{axis}</span>
-                      <input
-                        type="number"
-                        step="1"
-                        bind:value={selectedKeyframe.rawPose.rot[i]}
-                        oninput={() => refreshMathPreview(liveScrub)}
-                      />
-                    </label>
+                  {#each [["P", "x", "Pitch"], ["Y", "y", "Yaw"], ["R", "z", "Roll"]] as const as [letter, axis, name], i (name)}
+                    <AxisInput
+                      label={letter}
+                      {axis}
+                      title={name}
+                      step={1}
+                      bind:value={selectedKeyframe.rawPose.rot[i]}
+                      oninput={() => refreshMathPreview(liveScrub)}
+                    />
                   {/each}
                 </div>
               {/if}
@@ -3028,18 +3073,17 @@
 
               {#if activeProject.calibration.enabled}
                 <div class="xyz-grid">
-                  {#each ["Off X", "Off Y", "Off Z"] as labelAxis, i (labelAxis)}
-                    <label>
-                      <span>{labelAxis} (m)</span>
-                      <input
-                        type="number"
-                        step="0.02"
-                        min="-2"
-                        max="2"
-                        bind:value={activeProject.calibration.posOffset[i]}
-                        oninput={() => refreshMathPreview(liveScrub)}
-                      />
-                    </label>
+                  {#each ["x", "y", "z"] as const as axis, i (axis)}
+                    <AxisInput
+                      label={axis.toUpperCase()}
+                      {axis}
+                      title="{t('studio.calibrationOffset')} {axis.toUpperCase()} (m)"
+                      step={0.02}
+                      min={-2}
+                      max={2}
+                      bind:value={activeProject.calibration.posOffset[i]}
+                      oninput={() => refreshMathPreview(liveScrub)}
+                    />
                   {/each}
                 </div>
 
@@ -3199,16 +3243,15 @@
               </button>
 
               <div class="xyz-grid">
-                {#each ["X", "Y", "Z"] as axis, i (axis)}
-                  <label>
-                    <span>Obj {axis}</span>
-                    <input
-                      type="number"
-                      step="0.1"
-                      bind:value={activeProject.target.worldPos[i]}
-                      oninput={() => refreshMathPreview(false)}
-                    />
-                  </label>
+                {#each ["x", "y", "z"] as const as axis, i (axis)}
+                  <AxisInput
+                    label={axis.toUpperCase()}
+                    {axis}
+                    title="{t('studio.targetPosition')} {axis.toUpperCase()}"
+                    step={0.1}
+                    bind:value={activeProject.target.worldPos[i]}
+                    oninput={() => refreshMathPreview(false)}
+                  />
                 {/each}
               </div>
 
@@ -3318,6 +3361,20 @@
               <SkipForward size={13} />
             </button>
           </div>
+
+          <button
+            type="button"
+            class="ghost sm icon-only"
+            class:pressed={looping}
+            aria-pressed={looping}
+            title={t("studio.loop")}
+            onclick={() => {
+              looping = !looping;
+              void api.studioControl({ loop: looping }).catch(() => {});
+            }}
+          >
+            <Repeat size={14} />
+          </button>
 
           <span class="time-readout">
             {formatTimeReadout(playheadTime, activeProject.duration)} /
@@ -3443,8 +3500,8 @@
                 oncontextmenu={(e) => openKeyframeContextMenu(kf, e)}
               >
                 <span class="kf-dot"></span>
-                <span>{formatKeyframeLabel(kf.label)}</span>
-                <small>{kf.time.toFixed(1)}s</small>
+                <span class="kf-short">{shortLabel(kf.label)}</span>
+                <span class="kf-full">{formatKeyframeLabel(kf.label)} · {kf.time.toFixed(1)}s</span>
               </button>
             {/each}
           </div>
@@ -3460,6 +3517,7 @@
                 class:selected={selectedKeyframeId === kf.id}
                 style="left: {leftPct}%"
                 title="Yaw {kf.rawPose.rot[1].toFixed(0)}° / Pitch {kf.rawPose.rot[0].toFixed(0)}°"
+                aria-label="{formatKeyframeLabel(kf.label)}: Yaw {kf.rawPose.rot[1].toFixed(0)}°"
                 onclick={() => {
                   selectedKeyframeId = kf.id;
                   selectedEffectId = null;
@@ -3479,15 +3537,17 @@
               <button
                 type="button"
                 class="optic-node"
+                class:selected={selectedKeyframeId === kf.id}
                 style="left: {leftPct}%"
+                title={opticLabel(kf)}
+                aria-label="{formatKeyframeLabel(kf.label)}: {opticLabel(kf)}"
                 onclick={() => {
                   selectedKeyframeId = kf.id;
                   selectedEffectId = null;
                   inspectorTab = "selection";
                 }}
               >
-                {kf.look?.zoom ? `${kf.look.zoom}mm` : ""}
-                {kf.look?.aperture ? `f/${kf.look.aperture}` : ""}
+                {opticLabel(kf)}
               </button>
             {/each}
           </div>
@@ -3950,38 +4010,53 @@
     color: var(--text-2);
     pointer-events: none;
   }
+  /* Marcador de keyframe: rombo compacto; etiqueta completa solo en hover o seleccionado */
   .kf-pill {
     position: absolute;
-    top: 10px;
+    top: 9px;
     transform: translateX(-50%);
-    padding: 4px 9px;
-    border-radius: 999px;
+    padding: 0;
+    width: 24px;
+    height: 24px;
+    justify-content: center;
+    border-radius: 6px;
     background: var(--surface-raised);
-    border: 1.5px solid var(--accent);
-    color: var(--text);
-    font-size: 0.75rem;
-    font-weight: 600;
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
+    color: var(--text-2);
+    font-size: 0.7rem;
+    font-weight: 700;
     z-index: 2;
     white-space: nowrap;
   }
+  .kf-pill:hover {
+    background: var(--surface-hover);
+    color: var(--text);
+  }
   .kf-pill.selected {
     background: var(--accent);
-    color: #fff;
-    border-color: #fff;
-    box-shadow: 0 0 12px rgba(var(--accent-color-rgb), 0.6);
-  }
-  .kf-pill small {
-    opacity: 0.8;
-    font-size: 0.68rem;
+    color: var(--accent-foreground);
   }
   .kf-dot {
-    width: 7px;
-    height: 7px;
-    border-radius: 999px;
-    background: var(--text-2);
+    display: none;
+  }
+  .kf-full {
+    display: none;
+    position: absolute;
+    bottom: calc(100% + 4px);
+    left: 50%;
+    transform: translateX(-50%);
+    padding: 3px 8px;
+    border-radius: var(--radius-sm);
+    background: var(--surface-raised);
+    color: var(--text);
+    font-size: 0.7rem;
+    font-weight: 500;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+    pointer-events: none;
+    z-index: 6;
+  }
+  .kf-pill:hover .kf-full,
+  .kf-pill.selected .kf-full {
+    display: block;
   }
   .rot-node,
   .optic-node {
@@ -3989,19 +4064,30 @@
     top: 11px;
     transform: translateX(-50%);
     padding: 3px 7px;
-    font-size: 0.7rem;
-    border-radius: 6px;
-    background: rgba(39, 65, 200, 0.35);
+    font-family: var(--font-mono);
+    font-size: 0.68rem;
+    border-radius: var(--radius-sm);
+    background: var(--surface-raised);
     color: var(--text-2);
     z-index: 2;
+    white-space: nowrap;
+  }
+  .rot-node:hover,
+  .optic-node:hover {
+    background: var(--surface-hover);
+    color: var(--text);
+  }
+  .rot-node.selected,
+  .optic-node.selected {
+    background: var(--accent-subtle);
+    color: var(--text);
   }
   .fx-block {
     position: absolute;
     top: 12px;
     height: 26px;
     border-radius: 7px;
-    background: linear-gradient(90deg, rgba(var(--accent-color-rgb), 0.55), var(--surface));
-    border: 1px solid var(--text-2);
+    background: linear-gradient(90deg, rgba(var(--accent-color-rgb), 0.55), var(--surface-raised));
     display: flex;
     align-items: center;
     padding: 0 8px;
@@ -4206,12 +4292,79 @@
     gap: 10px;
     min-width: 0;
   }
-  .telemetry-bar {
+  .status-strip {
+    position: relative;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 18px;
+    padding: 6px 12px;
+    border-radius: var(--radius-md);
+    background: var(--surface);
+    font-size: 0.76rem;
+    color: var(--text-muted);
+  }
+  .status-strip .tone {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--text-2);
+  }
+  .status-strip .dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--text-muted);
+  }
+  .status-strip .ok .dot {
+    background: var(--ok);
+  }
+  .status-strip .warn .dot {
+    background: var(--warn);
+  }
+  .kv {
+    display: inline-flex;
+    gap: 6px;
+    font-family: var(--font-mono);
+    color: var(--text);
+    font-variant-numeric: tabular-nums;
+  }
+  .kv b {
+    font-weight: 600;
+    color: var(--text-muted);
+  }
+  .tele-more {
+    margin-left: auto;
+  }
+  .tele-more summary {
+    cursor: pointer;
+    color: var(--text-2);
+    list-style: none;
+    padding: 2px 8px;
+    border-radius: var(--radius-sm);
+  }
+  .tele-more summary:hover {
+    background: var(--surface-hover);
+    color: var(--text);
+  }
+  .tele-more summary::-webkit-details-marker {
+    display: none;
+  }
+  .tele-grid {
+    position: absolute;
+    right: 0;
+    bottom: calc(100% + 6px);
+    z-index: 5;
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 8px;
-    padding: 9px 12px;
-    font-size: 0.74rem;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px 16px;
+    width: min(620px, 100%);
+    padding: 12px 14px;
+    border-radius: var(--radius-md);
+    background: var(--surface-raised);
+    box-shadow:
+      0 0 0 1px var(--border-subtle),
+      0 12px 32px rgba(0, 0, 0, 0.5);
   }
   .tele-col {
     display: flex;
@@ -4220,23 +4373,17 @@
   }
   .tele-label {
     font-weight: 600;
-    font-size: 0.7rem;
+    font-size: 0.68rem;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--text-muted);
   }
-  .tele-label.vrc {
-    color: var(--ok);
-  }
-  .tele-label.base {
-    color: var(--text-2);
-  }
-  .tele-label.final {
-    color: #38bdf8;
-  }
-  .telemetry-bar code {
+  .tele-grid code {
     font-size: 0.72rem;
     color: var(--text);
   }
-  .telemetry-bar code.muted {
-    color: var(--text-2);
+  .tele-grid code.muted {
+    color: var(--text-muted);
   }
 
   .insp-body {
@@ -4322,11 +4469,6 @@
   }
   .xyz-grid > * {
     min-width: 0;
-  }
-  .xyz-grid input {
-    width: 100%;
-    min-width: 0;
-    box-sizing: border-box;
   }
   .local-readout {
     margin: 0;
