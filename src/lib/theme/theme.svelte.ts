@@ -2,7 +2,7 @@ import { t, type Key } from "$lib/i18n/index.svelte";
 
 export type ThemeMode = "system" | "light" | "dark";
 export type ResolvedTheme = "light" | "dark";
-export type AccentPreset = "electric" | "violet" | "emerald" | "rose" | "amber" | "cyan";
+export type AccentPreset = "indigo" | "electric" | "violet" | "emerald" | "rose" | "amber" | "cyan";
 
 export interface AccentDefinition {
   id: AccentPreset;
@@ -13,6 +13,7 @@ export interface AccentDefinition {
 }
 
 export const ACCENT_PRESETS: Record<AccentPreset, AccentDefinition> = {
+  indigo: { id: "indigo", name: "Índigo", labelKey: "theme.accent.indigo", hex: "#6366f1", rgb: "99, 102, 241" },
   electric: { id: "electric", name: "Azul Eléctrico", labelKey: "theme.accent.electric", hex: "#3d5afe", rgb: "61, 90, 254" },
   violet: { id: "violet", name: "Violeta Neón", labelKey: "theme.accent.violet", hex: "#8b5cf6", rgb: "139, 92, 246" },
   emerald: { id: "emerald", name: "Esmeralda", labelKey: "theme.accent.emerald", hex: "#10b981", rgb: "16, 185, 129" },
@@ -28,7 +29,7 @@ export function getAccentName(id: AccentPreset): string {
 
 let mode = $state<ThemeMode>("system");
 let resolved = $state<ResolvedTheme>("dark");
-let accent = $state<AccentPreset>("electric");
+let accent = $state<AccentPreset>("indigo");
 let customAccent = $state<string | null>(null);
 let initialized = false;
 
@@ -87,7 +88,7 @@ function applyToDOM() {
   // Resolve accent
   if (customAccent) {
     root.removeAttribute("data-accent");
-    const rgb = hexToRgb(customAccent) ?? "61, 90, 254";
+    const rgb = hexToRgb(customAccent) ?? "99, 102, 241";
     root.style.setProperty("--accent-color", customAccent);
     root.style.setProperty("--accent-color-rgb", rgb);
     root.style.setProperty("--accent-glow", `rgba(${rgb}, 0.32)`);
@@ -96,7 +97,7 @@ function applyToDOM() {
     root.style.setProperty("--accent-foreground", "#ffffff");
   } else {
     root.setAttribute("data-accent", accent);
-    const preset = ACCENT_PRESETS[accent] || ACCENT_PRESETS.electric;
+    const preset = ACCENT_PRESETS[accent] || ACCENT_PRESETS.indigo;
     root.style.removeProperty("--accent-color");
     root.style.removeProperty("--accent-color-rgb");
     root.style.removeProperty("--accent-glow");

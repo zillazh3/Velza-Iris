@@ -223,6 +223,7 @@
   "theme.accent.label": "Brand Accent Color",
   "theme.accent.sub": "Dynamic CSS tokens for accent and soft glow",
   "theme.accent.quick": "Quick brand palette:",
+  "theme.accent.indigo": "Indigo",
   "theme.accent.electric": "Electric Blue",
   "theme.accent.violet": "Neon Violet",
   "theme.accent.emerald": "Emerald",
