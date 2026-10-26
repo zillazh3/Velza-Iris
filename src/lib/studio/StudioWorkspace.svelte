@@ -552,6 +552,47 @@
     refreshMathPreview(false);
   });
 
+  // El path del rig (5 huesos en VRChat) debe reflejar SIEMPRE los puntos del proyecto: se resincroniza solo cuando cambia
+  // lo que lo define (keyframes, tiempos, duración, espacio, escala o el ancla del jugador) y al cambiar de proyecto.
+  // Antes solo se sincronizaba al arrastrar un punto o con los botones de Ajustes. Si el rig no está anclado el backend
+  // responde con un error que se ignora. La sincronización tarda ~3 s (parámetros synced); el backend descarta las viejas.
+  let pathSyncTimer: ReturnType<typeof setTimeout> | null = null;
+  const PATH_RESYNC_MS = 15000;
+  // `$derived` de texto: `status` se reemplaza en cada sondeo (750 ms) y, leído dentro del effect, reiniciaría el debounce
+  // sin parar; así el effect solo corre cuando cambia el CONTENIDO de la firma.
+  const pathSignature = $derived(
+    [
+      activeProject.id,
+      activeProject.duration,
+      activeProject.space,
+      activeProject.trajectoryScale,
+      status.anchor ? `${status.anchor.eye.join(",")}@${status.anchor.yaw}` : "",
+      ...activeProject.keyframes.map(
+        (k) => `${k.time}|${k.rawPose.pos.join(",")}|${k.localPose?.pos?.join(",") ?? ""}|${k.transition}|${k.knotMode}`,
+      ),
+    ].join(";"),
+  );
+  $effect(() => {
+    void pathSignature;
+    if (pathSyncTimer) clearTimeout(pathSyncTimer);
+    pathSyncTimer = setTimeout(() => {
+      void api.visualizerSyncPath($state.snapshot(activeProject) as SequenceProject).catch(() => {});
+    }, 800);
+    return () => {
+      if (pathSyncTimer) clearTimeout(pathSyncTimer);
+    };
+  });
+
+  // Reenvío periódico: los huesos del path se congelan uno a uno por parámetros, así que un jugador que entra tarde o un
+  // paquete perdido dejan el path viejo hasta la siguiente sincronización. Reenviar los mismos puntos no mueve nada y lo
+  // cura solo (≤ ~18 s). Con el rig apagado el backend responde con error, que se ignora.
+  $effect(() => {
+    const timer = setInterval(() => {
+      void api.visualizerSyncPath($state.snapshot(activeProject) as SequenceProject).catch(() => {});
+    }, PATH_RESYNC_MS);
+    return () => clearInterval(timer);
+  });
+
   // Vigilar Captura Armada: en cuanto llegue un nuevo paquete `/usercamera/Pose` de VRChat, capturar automáticamente
   $effect(() => {
     const seq = status.camera?.poseSeq ?? 0;
@@ -1294,12 +1335,26 @@
     void refreshMathPreview(liveScrub);
   }
 
-  function createNewProject() {
-    pushUndoSnapshot();
-    activeProject = createDefaultSequenceProject(t("default.newProjectName"), status.anchor);
+  /** "Nueva secuencia" = proyecto en blanco: sin keyframes ni efectos (ni los de ejemplo), sin historial del anterior. */
+  async function createNewProject() {
+    // Una reproducción en curso sigue con el proyecto anterior: se detiene antes de reemplazarlo.
+    if (playbackStatus.state !== "stopped") {
+      try {
+        await api.stopStudio();
+      } catch {
+        /* ya estaba detenida */
+      }
+    }
+    // Las ediciones del proyecto que se abandona quedan en la biblioteca en memoria (si estaba guardado).
+    syncActiveProjectToLibrary(activeProject);
+    activeProject = createDefaultSequenceProject(t("default.newProjectName"), status.anchor, false);
     selectedKeyframeId = null;
     selectedEffectId = null;
     playheadTime = 0;
+    undoStack = [];
+    redoStack = [];
+    evaluatedFrame = null;
+    trajectoryPreview = null;
     pendingDurationConflict = null;
     void refreshMathPreview(false);
   }
