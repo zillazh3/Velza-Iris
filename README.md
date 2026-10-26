@@ -1,95 +1,131 @@
-# Velza Iris
+<div align="center">
 
-Aplicación de escritorio para controlar la cámara oficial de VRChat mediante OSC. Incluye encuadres y ajustes de cámara, movimientos predefinidos y una sonda de línea de comandos para inspeccionar y probar la comunicación OSC.
+# 🎥 Velza Iris
 
-## 🧰 Requisitos
+**Tu estudio cinematográfico para VRChat.**
+Controla la cámara oficial de VRChat por OSC: encuadres, movimientos y secuencias, sin VRC+ ni matemáticas 3D.
 
-- Windows.
-- Node.js y pnpm para la interfaz y los comandos de desarrollo.
-- Rust y Cargo para ejecutar o compilar la aplicación de escritorio y la sonda.
-- VRChat abierto y OSC habilitado para conectar la aplicación con la cámara.
+🇲🇽 Español · [🇺🇸 English](README.en.md)
 
-## 🚀 Preparar y ejecutar la aplicación
+![Pantalla de inicio de Velza Iris en tema oscuro](docs/images/es/home.png)
 
-Desde PowerShell, en la carpeta del proyecto:
+</div>
 
-```powershell
-pnpm install
-pnpm tauri dev
-```
+---
 
-`pnpm tauri dev` inicia Velza Iris como aplicación de escritorio y compila el código Rust cuando hace falta. Para ejecutar únicamente el servidor de desarrollo web de Vite:
+## ✨ Características
 
-```powershell
-pnpm dev
-```
+- 📸 **Encuadres:** catálogo de retratos, planos de cuerpo, ambiente y video (zoom, apertura, exposición y enfoque) listos para aplicar con un clic.
+- 🌀 **Movimientos predefinidos:** órbitas, hélice, push-in, pull-out, crane, dolly zoom y handheld, además de **Turnaround** para hojas de referencia.
+- 🎬 **Iris Studio:** crea secuencias capturando puntos (A, B, C…) o grabando un recorrido continuo; edítalas con línea de tiempo, efectos, curvas y vista espacial 3D.
+- 📚 **Biblioteca:** guarda, abre, importa y exporta secuencias en JSON, con soporte de **VRChat Camera Dolly**.
+- 🧭 **Relativo al jugador:** calibra un ancla y tus encuadres y secuencias funcionan en cualquier mundo.
+- 🕺 **Visualizador de avatar:** gizmo de cámara y path de 5 huesos dentro de VRChat (requiere el prefab de Unity; ver [`docs/avatar-visualizer.md`](docs/avatar-visualizer.md)).
+- 🌐 **Español e inglés**, tema oscuro/claro y color de acento a elegir.
+- 🔒 **Portable y sin telemetría:** no usa internet; solo habla con VRChat en tu PC.
 
-La interfaz web por sí sola no ofrece la conexión OSC de la aplicación de escritorio.
+## 📸 Capturas
 
-## 🎮 Conectar con VRChat
+| Encuadres | Iris Studio · Captura |
+| :---: | :---: |
+| ![Catálogo de encuadres](docs/images/es/framings.png) | ![Iris Studio en modo Captura](docs/images/es/studio-capture.png) |
+| **Iris Studio · Editor** | **Biblioteca** |
+| ![Iris Studio en modo Editor](docs/images/es/studio-editor.png) | ![Biblioteca de secuencias](docs/images/es/library.png) |
 
-1. Abre VRChat y activa OSC en **Menú de acción → Opciones → OSC → Activado**.
-2. Abre la cámara de VRChat. Velza Iris no puede abrirla por OSC.
-3. Inicia la aplicación con `pnpm tauri dev`; se conectará a VRChat mediante OSCQuery.
-4. Para usar encuadres y movimientos relativos al avatar, coloca la cámara cerca de la cara, mirando al frente, y pulsa **Calibrar ancla**. Recalibra después de teletransportarte.
-5. Elige un encuadre o movimiento en la interfaz. Los movimientos requieren la cámara abierta y un ancla calibrada.
+> Capturas tomadas con VRChat abierto pero la cámara cerrada, por eso aparece el aviso amarillo.
 
-El movimiento **Turnaround** captura vistas alrededor del avatar. Sigue las indicaciones de la aplicación y pon el enfoque de la cámara de VRChat en modo Manual antes de iniciarlo.
+## 📦 Descarga (portable)
 
-## 🧪 Comandos de desarrollo
+1. Descarga el `.zip` más reciente (`VelzaIris-vX.Y.Z-win-x64-portable.zip`) desde la sección de **Releases**.
+2. Descomprímelo donde quieras y ejecuta `velza-iris.exe`. No hay instalador.
+3. Tus datos se guardan en `VelzaIris-data/`, junto al `.exe` (o en `%LOCALAPPDATA%` si lo eliges en Ajustes). Para actualizar, reemplaza solo el `.exe` y conserva esa carpeta.
 
-Ejecuta estos comandos desde la raíz del repositorio:
+**Requisitos:** Windows 10/11 de 64 bits, Microsoft Edge WebView2 (incluido en Windows 11) y VRChat con OSC habilitado.
+
+## 🚀 Cómo se usa
+
+1. 🎮 En VRChat, activa OSC en **Menú de acción → Opciones → OSC → Activado**.
+2. 📷 Abre la cámara de VRChat (Velza Iris no puede abrirla por ti).
+3. ▶️ Ejecuta `velza-iris.exe`. Arriba verás **VRChat conectado** y **Cámara abierta**.
+4. 🎯 Acerca la cámara a tu rostro, mirando al frente, muévela un poco y pulsa **Calibrar ancla**. Recalibra después de teletransportarte.
+5. 🖼️ Entra a **Encuadres** para aplicar un plano o movimiento, o a **Iris Studio** para crear tu propia secuencia: captura el Punto A, muévete, captura el Punto B y pulsa **Reproducir en VRChat**.
+
+Guía completa paso a paso: [`docs/user_guide.es.md`](docs/user_guide.es.md).
+
+## 🛠️ Tecnologías
+
+| Capa | Tecnología |
+| --- | --- |
+| Aplicación de escritorio | [Tauri 2](https://tauri.app) |
+| Backend | Rust (edición 2024) · [`rosc`](https://crates.io/crates/rosc) (OSC) · [`mdns-sd`](https://crates.io/crates/mdns-sd) (OSCQuery/mDNS) · `serde` / `serde_json` |
+| Interfaz | [Svelte 5](https://svelte.dev) + [SvelteKit](https://svelte.dev/docs/kit) (`adapter-static`) · TypeScript |
+| Build | [Vite](https://vite.dev) · [pnpm](https://pnpm.io) |
+| UI | [Lucide](https://lucide.dev) (íconos) · Manrope (tipografía) · i18n propio (`es-MX` / `en`) |
+| Protocolo | OSC sobre UDP (envío a `9000`, escucha en `9001`) y OSCQuery de VRChat |
+
+## ⌨️ Comandos
+
+Desde la raíz del repositorio, en PowerShell. Necesitas Node.js, pnpm, Rust y Cargo.
 
 | Comando | Uso |
 | --- | --- |
-| `pnpm tauri dev` | Inicia la aplicación de escritorio en modo desarrollo. |
-| `pnpm dev` | Inicia el servidor de desarrollo web de Vite. |
-| `pnpm check` | Revisa los tipos y componentes Svelte. |
-| `pnpm check:watch` | Repite la revisión mientras editas archivos. |
-| `pnpm build` | Compila la interfaz web. |
-| `pnpm preview` | Sirve localmente la compilación web para previsualizarla. |
-| `pnpm tauri build` | Ejecuta la compilación de escritorio de Tauri. |
+| `pnpm install` | Instala las dependencias de la interfaz. |
+| `pnpm tauri dev` | Inicia la app de escritorio en modo desarrollo. |
+| `pnpm dev` | Servidor de desarrollo web de Vite (sin conexión OSC). |
+| `pnpm check` | Revisa tipos y componentes Svelte. |
+| `pnpm test:i18n` | Verifica que `es-MX.json` y `en.json` estén sincronizados y sin textos sueltos. |
+| `pnpm test:logs` | Pruebas de la vista de Logs. |
+| `pnpm build` | Compila la interfaz web (`build/`). |
+| `pnpm tauri build --no-bundle` | Genera el ejecutable de release en `src-tauri/target/release/velza-iris.exe`. |
 
-La configuración actual de Tauri tiene el empaquetado desactivado (`bundle.active: false`), así que `pnpm tauri build` no genera un instalador empaquetado en este estado del proyecto.
+El empaquetado de Tauri está desactivado (`bundle.active: false`), así que no se genera instalador: el portable es el `.exe` comprimido en un `.zip`.
 
-## 🔎 Sonda OSC (`tools/probe`)
+### 🔎 Sonda OSC (`tools/probe`)
 
-La sonda sirve para descubrir el servicio OSCQuery de VRChat, escuchar mensajes OSC y enviar mensajes de prueba. Puedes ejecutarla desde la raíz del repositorio con Cargo:
+Herramienta de línea de comandos para descubrir OSCQuery, escuchar y enviar mensajes OSC:
 
 ```powershell
 cargo run --manifest-path tools/probe/Cargo.toml -- tree
-```
-
-Comandos disponibles:
-
-| Comando | Uso |
-| --- | --- |
-| `cargo run --manifest-path tools/probe/Cargo.toml -- tree` | Busca VRChat por mDNS, consulta OSCQuery y guarda el árbol de `/usercamera` en `docs/oscquery-usercamera.json`. |
-| `cargo run --manifest-path tools/probe/Cargo.toml -- tree 127.0.0.1:PORT` | Consulta un host y puerto OSCQuery indicados manualmente. |
-| `cargo run --manifest-path tools/probe/Cargo.toml -- listen` | Escucha `/usercamera/*` en UDP 9001, muestra los mensajes y los guarda en `tools/probe/logs/`. |
-| `cargo run --manifest-path tools/probe/Cargo.toml -- listen PORT` | Escucha en otro puerto UDP. |
-| `cargo run --manifest-path tools/probe/Cargo.toml -- send /usercamera/ENDPOINT VALUE` | Envía un mensaje OSC a `127.0.0.1:9000`. |
-| `cargo run --manifest-path tools/probe/Cargo.toml -- rate HZ SEGUNDOS [RADIO]` | Envía una órbita de prueba a esa frecuencia y mide los ecos de Pose. El radio predeterminado es `0.1` metros. |
-
-Ejemplos:
-
-```powershell
 cargo run --manifest-path tools/probe/Cargo.toml -- listen
 cargo run --manifest-path tools/probe/Cargo.toml -- send /usercamera/Zoom 45
-cargo run --manifest-path tools/probe/Cargo.toml -- send /usercamera/LookAtMe true
-cargo run --manifest-path tools/probe/Cargo.toml -- send /usercamera/Mode i:1 --to 127.0.0.1:9000
 cargo run --manifest-path tools/probe/Cargo.toml -- rate 60 10
 ```
 
-Para `send`, `true` y `false` se interpretan como booleanos, `i:N` como enteros, los números como decimales y el resto como texto. Puedes cambiar el destino con `--to host:port`.
+| Subcomando | Uso |
+| --- | --- |
+| `tree [host:puerto]` | Busca VRChat por mDNS y guarda el árbol de `/usercamera` en `docs/oscquery-usercamera.json`. |
+| `listen [puerto]` | Escucha `/usercamera/*` en UDP 9001 y guarda logs en `tools/probe/logs/`. |
+| `send /usercamera/ENDPOINT VALOR [--to host:puerto]` | Envía un mensaje OSC (`true`/`false` booleano, `i:N` entero, número decimal, o texto). |
+| `rate HZ SEGUNDOS [RADIO]` | Envía una órbita de prueba y mide los ecos de Pose (radio por defecto: `0.1` m). |
 
-**Precaución:** `send` cambia el endpoint OSC indicado en VRChat. `rate` mueve la cámara en una órbita pequeña y luego intenta devolverla a la pose inicial. Abre la cámara antes de usarlo y cierra otras herramientas OSC que estén usando UDP 9001 antes de ejecutar `listen` o `rate`. Pulsa `Ctrl+C` para detener la escucha.
+> ⚠️ `send` cambia ajustes reales de la cámara y `rate` la mueve. Abre la cámara antes y cierra otras apps OSC que usen UDP 9001.
 
-## 💾 Datos locales y privacidad
+## 🗂️ Estructura del proyecto
 
-La aplicación busca y controla VRChat en la red local mediante OSC/OSCQuery. La interfaz indica que no usa telemetría ni conexión a internet. Al iniciar, carga los presets incluidos y busca presets adicionales en formato JSON en `VelzaIris-data/presets`, junto al ejecutable; durante desarrollo, la carpeta de datos queda junto al binario de desarrollo de Tauri. La sonda guarda sus logs en `tools/probe/logs/`.
+```
+src/                  Interfaz (SvelteKit)
+  routes/             Vistas principales
+  lib/studio/         Iris Studio (timeline, editor, viewport 3D)
+  lib/i18n/           Diccionarios es-MX / en
+src-tauri/src/        Backend Rust
+  osc/ camera/        Protocolo OSC/OSCQuery y control de la cámara
+  motion/ studio/     Movimientos, secuencias, grabación y reproducción
+  avatar/ anchor/     Visualizador de avatar y calibración del ancla
+  presets/ storage/   Encuadres y datos portables
+tools/                Sonda OSC y scripts de verificación
+docs/                 Guías y hallazgos técnicos
+```
 
-## 📚 Documentación del proyecto
+## 🔒 Datos locales y privacidad
 
-- [`docs/osc-findings.md`](docs/osc-findings.md): hallazgos y comandos de la sonda OSC.
-- [`CLAUDE.md`](CLAUDE.md): contexto y plan técnico del proyecto.
+Velza Iris no usa telemetría ni conexión a internet: se comunica con VRChat por OSC/OSCQuery dentro de tu red local. Presets, secuencias y ajustes se guardan en `VelzaIris-data/` junto al ejecutable (o en `%LOCALAPPDATA%\VelzaIris-data`). Las preferencias de tema e idioma se guardan en el WebView de la app.
+
+## 📚 Documentación
+
+- 📖 [Guía de usuario (español)](docs/user_guide.es.md) · [User guide (English)](docs/user_guide.en.md)
+- 🔬 [`docs/osc-findings.md`](docs/osc-findings.md): hallazgos y pruebas de OSC.
+- 🕺 [`docs/avatar-visualizer.md`](docs/avatar-visualizer.md): visualizador de avatar.
+
+## 📄 Licencia
+
+Distribuido bajo la licencia [MIT](LICENSE).
