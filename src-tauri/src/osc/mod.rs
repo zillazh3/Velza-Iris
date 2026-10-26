@@ -42,7 +42,22 @@ impl Osc {
             Ok(rx) => {
                 std::thread::spawn(move || {
                     let mut buf = [0u8; 65536];
-                    while let Ok(n) = rx.recv(&mut buf) {
+                    loop {
+                        let n = match rx.recv(&mut buf) {
+                            Ok(n) => n,
+                            Err(ref e) if e.kind() == std::io::ErrorKind::ConnectionReset => {
+                                // En Windows (Winsock), 10054 (WSAECONNRESET) ocurre en UDP tras un ICMP; ignorar y continuar escuchando
+                                continue;
+                            }
+                            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock || e.kind() == std::io::ErrorKind::TimedOut => {
+                                continue;
+                            }
+                            Err(e) => {
+                                eprintln!("[OSC] Error en recepción UDP puerto {}: {}", listen_port, e);
+                                std::thread::sleep(std::time::Duration::from_millis(10));
+                                continue;
+                            }
+                        };
                         let Ok((_, pkt)) = decoder::decode_udp(&buf[..n]) else { continue };
                         let mut msgs = Vec::new();
                         flatten(pkt, &mut msgs);
@@ -51,7 +66,10 @@ impl Osc {
                 });
                 true
             }
-            Err(_) => false,
+            Err(e) => {
+                eprintln!("[OSC] No se pudo enlazar socket de recepción en 127.0.0.1:{} ({}); operando en lazo abierto.", listen_port, e);
+                false
+            }
         };
         Ok(Osc {
             tx,
@@ -69,6 +87,22 @@ impl Osc {
     /// Envío directo de un paquete OSC sin conversión de protocolo de cámara.
     pub fn send_raw(&self, addr: String, args: Vec<rosc::OscType>) -> Result<(), String> {
         self.send(addr, args)
+    }
+
+    /// Envío directo de un paquete OSC (Message o Bundle) codificado.
+    pub fn send_packet(&self, packet: &OscPacket) -> Result<(), String> {
+        let bytes = encoder::encode(packet).map_err(|e| e.to_string())?;
+        self.tx.send_to(&bytes, self.target).map(drop).map_err(|e| e.to_string())
+    }
+
+    /// Envío atómico de múltiples mensajes OSC dentro de un mismo OSC Bundle.
+    pub fn send_bundle(&self, messages: Vec<OscMessage>) -> Result<(), String> {
+        let content = messages.into_iter().map(OscPacket::Message).collect();
+        let bundle = rosc::OscBundle {
+            timetag: rosc::OscTime { seconds: 0, fractional: 0 },
+            content,
+        };
+        self.send_packet(&OscPacket::Bundle(bundle))
     }
 
     /// Slider, toggle, modo o acción; el valor se valida y recorta en `protocol::encode`.

@@ -1,14 +1,18 @@
-//! Módulo de integración con el asset de avatar para VRChat (VRCFury).
-//! Separa estrictamente el protocolo de comunicación, el enrutamiento de órdenes,
-//! el adaptador del rig de huesos y la sincronización de estado.
+//! Módulo de compatibilidad e integración con el Rig Visualizador de VRChat (Avatars 3.0 / Unity).
+//!
+//! Implementa:
+//! - Los 11 endpoints canónicos estrictos de OSC.
+//! - Normalización matemática respecto al Ancla y división angular modular.
+//! - Protocolo de multiplexación temporal de 5 huesos (`SyncPathMeshAsync`) no bloqueante.
+//! - Sincronización en tiempo real a 60 Hz de la cámara visualizadora vía OSC Bundles.
 
 pub mod config;
 pub mod protocol;
-pub mod rig_adapter;
-pub mod router;
 pub mod service;
-pub mod state_adapter;
-pub mod validator;
 
 #[cfg(test)]
 mod tests;
+
+pub use config::VisualizerConfig;
+pub use protocol::*;
+pub use service::{VisualizerService, VisualizerSnapshot};
