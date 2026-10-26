@@ -54,9 +54,15 @@ pub fn run() {
             commands::fit_keyframes_to_duration,
             commands::sample_base_pose_at,
             commands::avatar_status,
-            commands::avatar_config,
-            commands::save_avatar_config,
-            commands::trigger_avatar_action
+            commands::visualizer_status,
+            commands::visualizer_activate,
+            commands::visualizer_set_hide_cam,
+            commands::visualizer_nudge,
+            commands::visualizer_reset_nudge,
+            commands::visualizer_set_anchor,
+            commands::visualizer_reset_anchor,
+            commands::visualizer_sync_path,
+            commands::visualizer_sync_camera
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

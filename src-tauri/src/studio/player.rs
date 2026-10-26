@@ -83,7 +83,7 @@ fn run_loop(
     live_osc: bool,
     rx: Receiver<StudioCmd>,
     shared: Arc<Mutex<StudioPlaybackStatus>>,
-    mut sink: impl FnMut(&EvaluatedFrame, bool) -> Result<(), String>,
+    mut sink: impl FnMut(&EvaluatedFrame, bool, bool) -> Result<(), String>,
 ) {
     let period = Duration::from_secs_f64(1.0 / HZ);
     let mut state = PlayState::Playing;
@@ -95,7 +95,7 @@ fn run_loop(
     let init_frame = evaluate(&project, anchor.as_ref(), current_time);
     let mut kinematics = KinematicsState::new(init_frame.base_pose);
     let mut init_err = None;
-    if let Err(e) = sink(&init_frame, live_osc) {
+    if let Err(e) = sink(&init_frame, live_osc, true) {
         init_err = Some(e);
         state = PlayState::Stopped;
     }
@@ -209,7 +209,8 @@ fn run_loop(
             } else {
                 kinematics.reset(frame.base_pose);
             }
-            if let Err(e) = sink(&frame, live_osc) {
+            // `flush` = último frame (fin del recorrido): los canales con pacing envían el valor exacto sin esperar.
+            if let Err(e) = sink(&frame, live_osc, state == PlayState::Stopped) {
                 error = Some(e);
                 state = PlayState::Stopped;
             }
@@ -235,7 +236,7 @@ fn run_loop(
             if is_stopped {
                 braking = false;
             }
-            if let Err(e) = sink(&frame, live_osc) {
+            if let Err(e) = sink(&frame, live_osc, is_stopped) {
                 error = Some(e);
                 state = PlayState::Stopped;
                 braking = false;
@@ -252,7 +253,7 @@ fn run_loop(
             };
         } else if force_eval {
             let frame = evaluate(&project, anchor.as_ref(), current_time);
-            if let Err(e) = sink(&frame, live_osc) {
+            if let Err(e) = sink(&frame, live_osc, true) {
                 error = Some(e);
                 state = PlayState::Stopped;
             }
@@ -283,7 +284,7 @@ impl StudioRunner {
         start_time: f32,
         looping: bool,
         live_osc: bool,
-        sink: impl FnMut(&EvaluatedFrame, bool) -> Result<(), String> + Send + 'static,
+        sink: impl FnMut(&EvaluatedFrame, bool, bool) -> Result<(), String> + Send + 'static,
     ) -> StudioRunner {
         let (tx, rx) = channel();
         let start_t = start_time.clamp(0.0, project.duration);
@@ -360,11 +361,69 @@ mod tests {
 
     #[test]
     fn preview_runner_plays_to_completion_and_stops_cleanly() {
-        let runner = StudioRunner::start(demo_project(), None, 0.0, false, false, |_, _| Ok(()));
+        let runner = StudioRunner::start(demo_project(), None, 0.0, false, false, |_, _, _| Ok(()));
         std::thread::sleep(Duration::from_millis(320));
         let st = runner.status();
         assert_eq!(st.state, PlayState::Stopped);
         assert!((st.current_time - 0.25).abs() < 1e-3);
         assert!((st.frame.unwrap().final_pose.pos[0] - 1.0).abs() < 1e-3);
+    }
+
+    /// Recorrido Pose + Zoom de `secs`: A→B en posición/Euler (yaw 180→90) y Zoom 45→120 lineal.
+    fn pose_zoom_project(secs: f32) -> SequenceProject {
+        let mut p = demo_project();
+        p.duration = secs;
+        p.keyframes[1].time = secs;
+        p.keyframes[1].raw_pose.rot = [10.0, 90.0, 5.0];
+        p.keyframes[0].look.zoom = Some(45.0);
+        p.keyframes[1].look.zoom = Some(120.0);
+        p.keyframes[1].transition = Transition::Linear;
+        p
+    }
+
+    type ZoomLog = Arc<Mutex<Vec<(Instant, f32)>>>;
+
+    /// Arranca el runner real con el mismo gate de Zoom que `play_sequence_internal` (`State::should_send_paced`).
+    fn start_gated(secs: f32) -> (StudioRunner, ZoomLog) {
+        let log: ZoomLog = Arc::default();
+        let l = log.clone();
+        let mut gate = crate::camera::State { open: true, ..Default::default() };
+        let runner = StudioRunner::start(pose_zoom_project(secs), None, 0.0, false, true, move |ev, _, flush| {
+            if let Some(z) = ev.zoom {
+                let now = Instant::now();
+                if gate.should_send_paced("Zoom", crate::osc::protocol::Value::F(z), now, flush)? {
+                    l.lock().unwrap().push((now, z));
+                }
+            }
+            Ok(())
+        });
+        (runner, log)
+    }
+
+    #[test]
+    fn zoom_stream_is_rate_limited_and_stops_exactly_at_path_end() {
+        let (runner, log) = start_gated(1.5);
+        std::thread::sleep(Duration::from_millis(1800));
+        assert_eq!(runner.status().state, PlayState::Stopped);
+        let sent = log.lock().unwrap().clone();
+        for (i, (t0, _)) in sent.iter().enumerate() {
+            let in_window = sent[i..].iter().filter(|(t, _)| *t - *t0 < Duration::from_secs(1)).count();
+            assert!(in_window <= 33, "{in_window} Zoom en 1 s (VRChat los encola 1 por frame)");
+        }
+        assert_eq!(sent.last().unwrap().1, 120.0, "el paquete de cierre lleva el Zoom destino exacto");
+        // Tras el cierre en t = T no sale ningún Zoom más.
+        std::thread::sleep(Duration::from_millis(300));
+        assert_eq!(log.lock().unwrap().len(), sent.len());
+    }
+
+    #[test]
+    fn cancelling_playback_stops_zoom_stream_immediately() {
+        let (runner, log) = start_gated(10.0);
+        std::thread::sleep(Duration::from_millis(400));
+        drop(runner); // stop_studio / halt(): Quit + join
+        let n = log.lock().unwrap().len();
+        assert!(n > 0);
+        std::thread::sleep(Duration::from_millis(300));
+        assert_eq!(log.lock().unwrap().len(), n, "0 Zoom tras cancelar");
     }
 }

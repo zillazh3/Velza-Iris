@@ -22,6 +22,8 @@ pub struct Output {
     pub sample: Sample,
     /// (Δposición m, Δrotación °) del temblor, si el movimiento lo pide.
     pub handheld: Option<([f32; 3], [f32; 3])>,
+    /// Última muestra del movimiento (queda `Stopped`): los sliders con pacing deben enviar el valor exacto.
+    pub last: bool,
 }
 
 pub struct Player {
@@ -71,6 +73,7 @@ impl Player {
         Some(Output {
             sample: self.motion.sample(self.t),
             handheld: self.motion.handheld.then(|| handheld(self.clock)),
+            last: self.state == PlayState::Stopped,
         })
     }
 

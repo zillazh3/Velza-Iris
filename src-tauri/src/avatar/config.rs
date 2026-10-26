@@ -1,39 +1,25 @@
-//! Configuración versionada y persistente para la integración con el avatar de VRChat.
+//! Configuración del módulo de integración con el visualizador de avatar de VRChat.
 
+use super::service::MuxTiming;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct AvatarIntegrationConfig {
-    pub schema_version: u32,
-    pub enabled: bool,
-    pub send_host: String,
-    pub send_port: u16,
-    pub listen_port: u16,
-    pub min_duration: f32,
-    pub max_duration: f32,
-    pub bone_count: usize,
-    pub rig_scale: f32,
-    pub coordinate_system: String,
-    pub auto_rearm: bool,
-    pub log_diagnostics: bool,
+pub struct VisualizerConfig {
+    pub max_range_meters: f32,
+    pub max_angle_degrees: f32,
+    pub auto_sync_on_scrub: bool,
+    /// Esperas del multiplexor de huesos (`MuxTiming::REMOTE` por defecto: los params son synced).
+    pub mux_timing: MuxTiming,
 }
 
-impl Default for AvatarIntegrationConfig {
+impl Default for VisualizerConfig {
     fn default() -> Self {
-        AvatarIntegrationConfig {
-            schema_version: 1,
-            enabled: true,
-            send_host: "127.0.0.1".into(),
-            send_port: 9000,
-            listen_port: 9001,
-            min_duration: 1.0,
-            max_duration: 30.0,
-            bone_count: 16,
-            rig_scale: 1.0,
-            coordinate_system: "UnityYUp".into(),
-            auto_rearm: true,
-            log_diagnostics: true,
+        VisualizerConfig {
+            max_range_meters: super::protocol::MAX_RANGE_METERS,
+            max_angle_degrees: super::protocol::MAX_ANGLE_DEGREES,
+            auto_sync_on_scrub: true,
+            mux_timing: MuxTiming::REMOTE,
         }
     }
 }

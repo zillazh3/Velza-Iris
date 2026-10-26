@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Change {
@@ -98,7 +98,24 @@ pub struct State {
     pub values: HashMap<String, Value>,
     /// Último valor enviado por endpoint para deduplicar tráfico óptico redundante a 60 Hz.
     pub last_sent: HashMap<String, Value>,
+    /// Últimos valores enviados por endpoint (ventana corta). Permite distinguir el eco (tardío o duplicado: VRChat
+    /// ecoa Zoom/Exposure dos veces y se observaron retrasos de varios segundos) de un cambio hecho por el usuario.
+    pub recent_sent: HashMap<String, std::collections::VecDeque<Value>>,
+    /// Instante del último envío por slider de `PACED` (ver `should_send_paced`).
+    pub paced_at: HashMap<String, Instant>,
 }
+
+/// Sliders que VRChat encola y consume a 1 mensaje por frame (feedback.vrchat.com "OSC /usercamera/Zoom processes
+/// messages slowly"): enviarlos más rápido que el framerate de VRChat acumula backlog y el valor sigue moviéndose
+/// después de terminar el recorrido. `/usercamera/Pose` no sufre esto y no se limita.
+pub const PACED: [&str; 4] = ["Zoom", "Exposure", "FocalDistance", "Aperture"];
+/// Hueco mínimo entre dos mensajes de un slider de `PACED` (~30 Hz; 31 ms en vez de 33,3 para tolerar el jitter del
+/// ticker de 60 Hz sin caer a 20 Hz). ponytail: cap fijo; si VRChat corre por debajo de 30 fps aún habría algo de
+/// backlog; la mejora sería esperar el eco del valor anterior.
+pub const PACED_MIN_GAP: std::time::Duration = std::time::Duration::from_millis(31);
+
+/// Cuántos valores enviados recientes se recuerdan por endpoint para reconocer ecos propios.
+const RECENT_SENT_WINDOW: usize = 512;
 
 impl Default for State {
     fn default() -> Self {
@@ -112,6 +129,8 @@ impl Default for State {
             pose_epoch_ms: None,
             values: HashMap::new(),
             last_sent: HashMap::new(),
+            recent_sent: HashMap::new(),
+            paced_at: HashMap::new(),
         }
     }
 }
@@ -188,8 +207,16 @@ impl State {
             _ => return (None, None),
         };
         self.values.insert(name.to_string(), v);
-        // Si el usuario cambió un slider en VRChat, actualizamos también last_sent para permitir re-sobrescribirlo
-        self.last_sent.insert(name.to_string(), v);
+        // Un eco de un valor que nosotros enviamos NO debe tocar `last_sent` (un eco tardío con un valor viejo haría que
+        // `should_send` omitiera el siguiente envío y el slider se quedara atascado). Solo un valor ajeno (el usuario
+        // movió el slider en VRChat) actualiza `last_sent`, para poder sobrescribirlo después.
+        let is_own_echo = self
+            .recent_sent
+            .get(name)
+            .is_some_and(|q| q.iter().any(|s| values_close_enough(*s, v)));
+        if !is_own_echo {
+            self.last_sent.insert(name.to_string(), v);
+        }
 
         if matches!(name, "LookAtMe" | "LookAtMeXOffset" | "LookAtMeYOffset") {
             let enabled = match self.values.get("LookAtMe") {
@@ -284,15 +311,41 @@ impl State {
 
     /// Determina si debemos enviar el valor por UDP o si es idéntico al último enviado (evita inundar a 60 Hz).
     pub fn should_send(&mut self, name: &str, value: Value) -> Result<bool, String> {
+        self.should_send_inner(name, value, false)
+    }
+
+    /// `exact`: solo omite el envío si el valor es idéntico al último (sin la tolerancia de 1e-3 del dedupe).
+    fn should_send_inner(&mut self, name: &str, value: Value, exact: bool) -> Result<bool, String> {
         self.check_writable(name)?;
         if matches!(kind(name), Some(Kind::Trigger)) {
             return Ok(true);
         }
-        if self.last_sent.get(name).copied().is_some_and(|prev| values_close_enough(prev, value)) {
+        let same = |prev: Value| if exact { prev == value } else { values_close_enough(prev, value) };
+        if self.last_sent.get(name).copied().is_some_and(same) {
             return Ok(false);
         }
         self.last_sent.insert(name.to_string(), value);
+        let q = self.recent_sent.entry(name.to_string()).or_default();
+        q.push_back(value);
+        if q.len() > RECENT_SENT_WINDOW {
+            q.pop_front();
+        }
         Ok(true)
+    }
+
+    /// Como `should_send`, pero con pacing para los sliders que VRChat encola (ver `PACED`). `flush` = último valor
+    /// de un recorrido: se envía sin esperar.
+    pub fn should_send_paced(&mut self, name: &str, value: Value, now: Instant, flush: bool) -> Result<bool, String> {
+        let paced = PACED.contains(&name);
+        if paced && !flush && self.paced_at.get(name).is_some_and(|t| now.saturating_duration_since(*t) < PACED_MIN_GAP) {
+            return Ok(false); // sin tocar `last_sent`: el siguiente tick fuera del hueco enviará el valor más reciente
+        }
+        // El paquete de cierre lleva el destino exacto: VRChat termina en el valor final, no a 1e-3 de él.
+        let send = self.should_send_inner(name, value, flush)?;
+        if paced && send {
+            self.paced_at.insert(name.to_string(), now);
+        }
+        Ok(send)
     }
 }
 
@@ -362,10 +415,6 @@ impl Camera {
         {
             let mut st = state.lock().unwrap();
             st.rx_available = osc.rx_bound;
-            if !osc.rx_bound {
-                // En modo Control Abierto (sin escucha en 9001), asumimos cámara abierta para no bloquear envíos.
-                st.open = true;
-            }
         }
         Ok(Camera { osc, state })
     }
@@ -393,20 +442,34 @@ impl Camera {
         {
             let mut st = state.lock().unwrap();
             st.rx_available = osc.rx_bound;
-            if !osc.rx_bound {
-                // En modo Control Abierto (sin escucha en 9001), asumimos cámara abierta para no bloquear envíos.
-                st.open = true;
-            }
         }
         Ok(Camera { osc, state })
+    }
+
+    /// Indica si el socket UDP de escucha en 9001 está enlazado activamente.
+    pub fn is_rx_bound(&self) -> bool {
+        self.osc.rx_bound
     }
 
     pub fn send_raw(&self, addr: String, args: Vec<rosc::OscType>) -> Result<(), String> {
         self.osc.send_raw(addr, args)
     }
 
+    /// Envía un paquete OSC Bundle atómicamente a VRChat.
+    pub fn send_bundle(&self, messages: Vec<rosc::OscMessage>) -> Result<(), String> {
+        self.osc.send_bundle(messages)
+    }
+
     pub fn set(&self, name: &str, value: Value) -> Result<(), String> {
         if !self.state.lock().unwrap().should_send(name, value)? {
+            return Ok(());
+        }
+        self.osc.set(name, value)
+    }
+
+    /// `set` con pacing para Zoom/Exposure/FocalDistance/Aperture (VRChat procesa 1 mensaje por frame).
+    pub fn set_paced(&self, name: &str, value: Value, flush: bool) -> Result<(), String> {
+        if !self.state.lock().unwrap().should_send_paced(name, value, Instant::now(), flush)? {
             return Ok(());
         }
         self.osc.set(name, value)
@@ -506,6 +569,29 @@ mod tests {
     }
 
     #[test]
+    fn stale_own_echo_does_not_suppress_next_send() {
+        let mut s = State::default();
+        s.open = true;
+        // Enviamos 50 → 60 → 50; llega tarde el eco de 60 y de 50 (con retraso).
+        assert!(s.should_send("Zoom", Value::F(50.0)).unwrap());
+        assert!(s.should_send("Zoom", Value::F(60.0)).unwrap());
+        s.apply(&msg("Zoom", vec![OscType::Float(50.0)]));
+        // Antes: el eco viejo (50) sobrescribía last_sent y el 50 siguiente se omitía con VRChat aún en 60.
+        s.apply(&msg("Zoom", vec![OscType::Float(60.0)]));
+        assert!(s.should_send("Zoom", Value::F(50.0)).unwrap(), "debe reenviar 50: last_sent era 60");
+    }
+
+    #[test]
+    fn user_slider_change_in_vrchat_can_be_overwritten() {
+        let mut s = State::default();
+        s.open = true;
+        assert!(s.should_send("Zoom", Value::F(50.0)).unwrap());
+        // El usuario mueve el slider en VRChat a 90 (valor que nunca enviamos).
+        s.apply(&msg("Zoom", vec![OscType::Float(90.0)]));
+        assert!(s.should_send("Zoom", Value::F(50.0)).unwrap(), "debe poder restaurar 50");
+    }
+
+    #[test]
     fn snapshot_tracks_boolean_toggles() {
         let mut s = State::default();
         assert_eq!(s.snapshot().look_at_me, None);
@@ -543,5 +629,67 @@ mod tests {
                 timestamp_ms: 1010
             })
         );
+    }
+
+    use crate::studio::model::Transition;
+    use std::time::Duration;
+
+    /// Simula un recorrido `secs` de Zoom 45→120 con ticks a `hz`, pasando cada tick por el gate. El último tick
+    /// (t = T) lleva `flush`. Devuelve (instante, valor) de cada Zoom que realmente saldría por UDP.
+    fn simulate_zoom_ramp(secs: f32, hz: u32, curve: Transition) -> Vec<(Duration, f32)> {
+        let mut s = State::default();
+        s.open = true;
+        let base = Instant::now();
+        let ticks = (secs * hz as f32).round() as u32;
+        let mut sent = vec![];
+        for i in 0..=ticks {
+            let t = Duration::from_secs_f64(i as f64 / hz as f64);
+            let z = 45.0 + 75.0 * curve.apply(i as f32 / ticks as f32);
+            if s.should_send_paced("Zoom", Value::F(z), base + t, i == ticks).unwrap() {
+                sent.push((t, z));
+            }
+        }
+        sent
+    }
+
+    #[test]
+    fn zoom_is_rate_limited_and_final_value_is_exact_for_any_duration_curve_and_tick_rate() {
+        for secs in [1.0_f32, 2.5, 10.0] {
+            for curve in [Transition::Linear, Transition::SmoothInOut] {
+                for hz in [60_u32, 90, 144] {
+                    let sent = simulate_zoom_ramp(secs, hz, curve);
+                    let ctx = format!("{secs}s {curve:?} {hz}Hz");
+                    for w in sent.windows(2) {
+                        // El paquete de cierre (flush) puede llegar antes del hueco mínimo; el resto no.
+                        if w[1].0 < Duration::from_secs_f32(secs) {
+                            assert!(w[1].0 - w[0].0 >= PACED_MIN_GAP, "{ctx}: hueco {:?}", w[1].0 - w[0].0);
+                        }
+                    }
+                    for (i, (t0, _)) in sent.iter().enumerate() {
+                        let in_window = sent[i..].iter().filter(|(t, _)| *t - *t0 < Duration::from_secs(1)).count();
+                        assert!(in_window <= 33, "{ctx}: {in_window} Zoom en 1 s");
+                    }
+                    let (t_last, z_last) = *sent.last().unwrap();
+                    assert_eq!(z_last, 120.0, "{ctx}: valor final exacto");
+                    assert_eq!(t_last, Duration::from_secs_f32(secs), "{ctx}: el cierre sale en t = T");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn pacing_only_applies_to_queued_sliders_and_flush_bypasses_it() {
+        let mut s = State::default();
+        s.open = true;
+        let t0 = Instant::now();
+        let t1 = t0 + Duration::from_millis(5);
+        assert!(s.should_send_paced("Zoom", Value::F(50.0), t0, false).unwrap());
+        assert!(!s.should_send_paced("Zoom", Value::F(51.0), t1, false).unwrap(), "dentro del hueco mínimo");
+        assert!(s.should_send_paced("Zoom", Value::F(52.0), t1, true).unwrap(), "flush ignora el hueco");
+        // Otros sliders no se frenan
+        assert!(s.should_send_paced("Hue", Value::F(10.0), t0, false).unwrap());
+        assert!(s.should_send_paced("Hue", Value::F(20.0), t1, false).unwrap());
+        // Cada slider con pacing lleva su propio reloj
+        assert!(s.should_send_paced("Exposure", Value::F(1.0), t1, false).unwrap());
     }
 }

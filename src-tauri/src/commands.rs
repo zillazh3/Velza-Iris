@@ -1,17 +1,14 @@
 //! Comandos Tauri: puente entre la UI y camera/anchor/presets/studio.
 use crate::anchor::{Anchor, AnchorManager, AnchorSnapshot};
-use crate::avatar::config::AvatarIntegrationConfig;
-use crate::avatar::protocol::AvatarAction;
-use crate::avatar::router::CommandRouter;
-use crate::avatar::service::{AvatarExecutionRequest, AvatarIntegrationSnapshot, IrisIntegrationService};
-use crate::avatar::state_adapter::AssetStateAdapter;
+use crate::avatar::config::VisualizerConfig;
+use crate::avatar::service::{SkipReason, VisualizerService, VisualizerSnapshot};
 use crate::camera::{now_epoch_ms, Camera, CameraOscEvent, CameraSnapshot, Change, DEFAULTS};
 use crate::motion::runner::{Cmd, Output, PlayState, Runner};
 use crate::motion::sample::{motions, Motion};
 use crate::motion::turnaround::{self, Action, Progress, Timing, Turnaround};
 use crate::osc::protocol::{Pose, Value};
 use crate::osc::query;
-use rosc::OscMessage;
+use rosc::OscType;
 use crate::presets::{self, Preset};
 use crate::storage;
 use crate::studio::calibration::{CalibrationRuntime, TelemetryReport};
@@ -39,8 +36,8 @@ pub struct ActiveRecording {
 }
 
 pub struct App {
-    camera: Mutex<Option<Camera>>,
-    anchor_mgr: Arc<Mutex<AnchorManager>>,
+    pub camera: Arc<Mutex<Option<Camera>>>,
+    pub anchor_mgr: Arc<Mutex<AnchorManager>>,
     /// Último preset estático aplicado; se reaplica cuando el usuario reabre la cámara.
     last: Mutex<Option<Preset>>,
     /// Movimiento paramétrico en curso; soltarlo (`None`) detiene el hilo.
@@ -54,15 +51,14 @@ pub struct App {
     /// Estado dinámico de telemetría y calibración adaptativa (separado de los datos persistentes del proyecto).
     calibration_rt: Mutex<CalibrationRuntime>,
     data: Result<PathBuf, String>,
-    /// Servicio de integración y FSM con el asset de avatar de VRChat.
-    pub avatar_service: Arc<Mutex<IrisIntegrationService>>,
-    avatar_state_adapter: Mutex<AssetStateAdapter>,
+    /// Servicio de integración y sincronización cinemática con el rig visualizador de VRChat.
+    pub visualizer: Arc<VisualizerService>,
 }
 
 impl App {
     pub fn new() -> App {
         App {
-            camera: Mutex::default(),
+            camera: Arc::new(Mutex::default()),
             anchor_mgr: Arc::new(Mutex::new(AnchorManager::new())),
             last: Mutex::default(),
             runner: Mutex::default(),
@@ -72,8 +68,7 @@ impl App {
             turnaround: Mutex::default(),
             calibration_rt: Mutex::default(),
             data: storage::data_dir(false),
-            avatar_service: Arc::new(Mutex::new(IrisIntegrationService::new(AvatarIntegrationConfig::default()))),
-            avatar_state_adapter: Mutex::new(AssetStateAdapter::new()),
+            visualizer: Arc::new(VisualizerService::new(VisualizerConfig::default())),
         }
     }
 
@@ -89,6 +84,26 @@ impl App {
         let mut mgr = self.anchor_mgr.lock().unwrap();
         mgr.check_timeouts(now_epoch_ms());
         mgr.snapshot()
+    }
+
+    /// ¿Hay un recorrido, movimiento o turnaround moviendo la cámara ahora mismo? Estado real de los runners (el flag
+    /// `external_control_active` queda en `true` tras terminar un movimiento y no es fiable para esto).
+    /// Usa `try_lock`: se llama desde el hilo de recepción OSC y un lock ocupado (p. ej. `halt` esperando a que termine un
+    /// runner que a su vez espera al ancla) no debe bloquearlo; ocupado = se asume que sí.
+    fn is_driving_camera(&self) -> bool {
+        let studio = self
+            .studio_runner
+            .try_lock()
+            .map_or(true, |g| g.as_ref().is_some_and(|r| r.status().state == PlayState::Playing));
+        let motion = self
+            .runner
+            .try_lock()
+            .map_or(true, |g| g.as_ref().is_some_and(|r| r.status().state == PlayState::Playing));
+        let turnaround = self
+            .turnaround
+            .try_lock()
+            .map_or(true, |g| g.as_ref().is_some_and(|t| !t.progress().finished));
+        studio || motion || turnaround
     }
 
     /// Detiene movimiento, reproducción de Studio y turnaround. No llamar con el lock de `camera` tomado.
@@ -135,113 +150,6 @@ impl App {
         }
         preset.apply(cam, anchor.as_ref())
     }
-
-    /// Procesa un mensaje OSC proveniente del avatar de VRChat (`/avatar/*`).
-    pub fn process_avatar_osc_message(&self, m: &OscMessage, app: AppHandle) {
-        let mut service = self.avatar_service.lock().unwrap();
-        let cmd = match service.validator.validate_message(m) {
-            Ok(Some(c)) => c,
-            Ok(None) => return,
-            Err(e) => {
-                if service.config.log_diagnostics {
-                    eprintln!("[Avatar OSC] Error al validar {}: {}", m.addr, e);
-                }
-                return;
-            }
-        };
-
-        let cam_snap = self.camera.lock().unwrap().as_ref().map(|c| c.state.lock().unwrap().snapshot());
-        let anchor = self.current_anchor();
-
-        let maybe_req = match &cmd {
-            crate::avatar::validator::ValidatedAvatarCommand::Action(act) => {
-                let action = *act;
-                match service.handle_action_with_camera(action, cam_snap.as_ref(), anchor.as_ref()) {
-                    Ok(req) => req,
-                    Err(e) => {
-                        eprintln!("[Avatar OSC] Acción {:?} rechazada: {}", action, e);
-                        None
-                    }
-                }
-            }
-            _ => {
-                if let Err(e) = CommandRouter::route(&mut service, cmd) {
-                    eprintln!("[Avatar OSC] Error en enrutador de avatar: {}", e);
-                }
-                None
-            }
-        };
-
-        let proj = service.project.clone();
-        let looping = service.looping;
-        // Liberamos explícitamente el candado antes de iniciar reproducción o sincronizar OSC
-        // para prevenir deadlocks en el hilo de escucha (`std::sync::Mutex` no es reentrante).
-        drop(service);
-
-        if let Some(req) = maybe_req {
-            match req {
-                AvatarExecutionRequest::StartPlayback { live_osc } => {
-                    let st = app.state::<App>();
-                    let _ = play_sequence_internal(&app, &st, proj, 0.0, looping, live_osc);
-                }
-                AvatarExecutionRequest::StopPlayback => {
-                    self.halt();
-                }
-            }
-        }
-
-        self.sync_avatar_osc_state();
-    }
-
-    /// Sincroniza el estado y progreso actual hacia los parámetros de expresión del avatar.
-    pub fn sync_avatar_osc_state(&self) {
-        let cam_guard = self.camera.lock().unwrap();
-        let Some(cam) = cam_guard.as_ref() else { return };
-        let service = self.avatar_service.lock().unwrap();
-        let current_time = self
-            .studio_runner
-            .lock()
-            .unwrap()
-            .as_ref()
-            .map(|r| r.status().current_time)
-            .unwrap_or(0.0);
-        let duration = service.project.duration.max(0.1);
-        let progress = (current_time / duration).clamp(0.0, 1.0);
-
-        let mut adapter = self.avatar_state_adapter.lock().unwrap();
-        let packets = adapter.sync_state_packets(service.state, progress, true);
-        for p in packets {
-            if let rosc::OscPacket::Message(msg) = p {
-                let _ = cam.send_raw(msg.addr, msg.args);
-            }
-        }
-    }
-
-    /// Disparo de acción de avatar manual (vía UI o pruebas).
-    pub fn trigger_avatar_action_internal(&self, action: AvatarAction, app: AppHandle) -> Result<(), String> {
-        let cam_snap = self.camera.lock().unwrap().as_ref().map(|c| c.state.lock().unwrap().snapshot());
-        let anchor = self.current_anchor();
-        let mut service = self.avatar_service.lock().unwrap();
-        let req = service.handle_action_with_camera(action, cam_snap.as_ref(), anchor.as_ref())?;
-        let proj = service.project.clone();
-        let looping = service.looping;
-        // Liberar el mutex antes de reproducir o llamar a sync_avatar_osc_state para evitar deadlocks
-        drop(service);
-
-        if let Some(r) = req {
-            match r {
-                AvatarExecutionRequest::StartPlayback { live_osc } => {
-                    let st = app.state::<App>();
-                    play_sequence_internal(&app, &st, proj, 0.0, looping, live_osc)?;
-                }
-                AvatarExecutionRequest::StopPlayback => {
-                    self.halt();
-                }
-            }
-        }
-        self.sync_avatar_osc_state();
-        Ok(())
-    }
 }
 
 #[derive(Serialize)]
@@ -267,6 +175,12 @@ fn reapply(app: AppHandle) {
         // ponytail: pausa fija para que VRChat termine de abrir; sin medir en vivo.
         std::thread::sleep(Duration::from_millis(300));
         let st = app.state::<App>();
+        // No pisar zoom/exposición de una reproducción o movimiento en curso con el preset estático.
+        let studio_playing = st.studio_runner.lock().unwrap().as_ref().is_some_and(|r| r.status().state == PlayState::Playing);
+        let motion_playing = st.runner.lock().unwrap().as_ref().is_some_and(|r| r.status().state == PlayState::Playing);
+        if studio_playing || motion_playing {
+            return;
+        }
         if let Some(p) = st.last.lock().unwrap().clone()
             && let Err(e) = st.apply(&p)
         {
@@ -275,26 +189,65 @@ fn reapply(app: AppHandle) {
     });
 }
 
+/// Reenvía una pose de la cámara real al mesh del avatar. Corre en el hilo de recepción OSC: `try_lock` sobre `camera`
+/// para no bloquearse contra `connect` (que suelta el `Camera` anterior, y con él este hilo, con el lock tomado).
+fn forward_pose_to_visualizer(app: &AppHandle, pose: &Pose) {
+    let st = app.state::<App>();
+    st.visualizer.note_pose_echo();
+    if !st.visualizer.enabled.load(Ordering::Relaxed) {
+        st.visualizer.note_skip(SkipReason::Disabled);
+        return;
+    }
+    // Durante un recorrido/movimiento ya lo sincroniza el hilo de 60 Hz con la pose enviada; reenviar el eco duplicaría
+    // y retrasaría el mesh.
+    if st.is_driving_camera() {
+        st.visualizer.note_skip(SkipReason::ExternalControl);
+        return;
+    }
+    let _ = st.visualizer.sync_camera_frame(pose, &|msgs| {
+        let guard = st.camera.try_lock().map_err(|_| "cámara ocupada")?;
+        let c = guard.as_ref().ok_or("Sin conexión con VRChat")?;
+        for msg in msgs {
+            let _ = c.send_raw(msg.addr, msg.args);
+        }
+        Ok(())
+    });
+}
+
 #[tauri::command]
 pub async fn connect(app: AppHandle, st: State<'_, App>) -> Result<(), String> {
-    if st.camera.lock().unwrap().is_some() {
-        return Ok(());
+    {
+        let cam_guard = st.camera.lock().unwrap();
+        if let Some(cam) = cam_guard.as_ref() {
+            if cam.is_rx_bound() {
+                return Ok(());
+            }
+        }
     }
+    // Si la cámara no estaba conectada o estaba en lazo abierto (!rx_bound), reinicializamos para reintentar enlace de escucha en 9001
+    *st.camera.lock().unwrap() = None;
     let target = tauri::async_runtime::spawn_blocking(|| query::vrchat_target(Duration::from_secs(8)))
         .await
         .map_err(|e| e.to_string())??;
     let mgr_arc = st.anchor_mgr.clone();
-    let app_handle = app.clone();
+    let app_avatar = app.clone();
     let cam = Camera::start_with_avatar_router(
         target,
         move |change, osc_ev| {
             let mut is_fresh_open = matches!(change, Some(Change::Opened));
+            // Pose a reenviar al rig; se envía después de soltar `anchor_mgr` (el hilo de 60 Hz toma ese lock y también
+            // `camera`: reenviar con él tomado podría cerrar un ciclo de espera).
+            let mut forward: Option<Pose> = None;
             if let Some(ev) = osc_ev {
                 let mut mgr = mgr_arc.lock().unwrap();
                 let prev_switches = mgr.snapshot().mode_switch_count;
                 match ev {
                     CameraOscEvent::Mode { new_mode, timestamp_ms, .. } => mgr.on_mode(i32::from(new_mode), timestamp_ms),
-                    CameraOscEvent::Pose { pose, seq, timestamp_ms } => mgr.on_pose(pose, seq, timestamp_ms),
+                    CameraOscEvent::Pose { pose, seq, timestamp_ms } => {
+                        mgr.on_pose(pose, seq, timestamp_ms);
+                        // La cámara real de VRChat es la fuente de verdad: su eco mueve el mesh del avatar.
+                        forward = Some(pose);
+                    }
                     CameraOscEvent::LookAtMe { enabled, offsets_xy, timestamp_ms } => {
                         mgr.on_look_at_me(enabled, offsets_xy, timestamp_ms)
                     }
@@ -305,13 +258,25 @@ pub async fn connect(app: AppHandle, st: State<'_, App>) -> Result<(), String> {
                     is_fresh_open = false;
                 }
             }
+            if let Some(pose) = forward {
+                forward_pose_to_visualizer(&app, &pose);
+            }
             if is_fresh_open {
                 reapply(app.clone());
             }
         },
         move |osc_msg| {
-            let st = app_handle.state::<App>();
-            st.process_avatar_osc_message(&osc_msg, app_handle.clone());
+            // VRChat devuelve por 9001 los parámetros del avatar local: se guardan los iris_* como prueba de que el
+            // avatar aplicó lo que le enviamos (diagnóstico en la tarjeta del visualizador).
+            let value = match osc_msg.args.first() {
+                Some(OscType::Float(f)) => Some(*f),
+                Some(OscType::Int(i)) => Some(*i as f32),
+                Some(OscType::Bool(b)) => Some(if *b { 1.0 } else { 0.0 }),
+                _ => None,
+            };
+            if let Some(v) = value {
+                app_avatar.state::<App>().visualizer.note_avatar_echo(&osc_msg.addr, v);
+            }
         },
     )?;
     *st.camera.lock().unwrap() = Some(cam);
@@ -337,7 +302,7 @@ pub fn status(st: State<App>) -> Status {
     }
 }
 
-/// Toma la pose actual de la cámara (cerca de la cara, mirando al frente) como origen de los presets.
+/// Toma la pose actual de la cámara (cerca de la cara, mirando al frente) como origen de los presets y clava el Ancla del Visualizador.
 #[tauri::command]
 pub fn calibrate(st: State<App>) -> Result<(), String> {
     let snap = {
@@ -345,6 +310,9 @@ pub fn calibrate(st: State<App>) -> Result<(), String> {
         let cam = cam.as_ref().ok_or("sin conexión con VRChat")?;
         cam.state.lock().unwrap().snapshot()
     };
+    if !snap.rx_available {
+        return Err("Puerto de escucha UDP 9001 no disponible (¿otra app OSC abierta?). Cierra la otra app y reconecta.".into());
+    }
     if !snap.open {
         return Err("cámara cerrada: ábrela en VRChat".into());
     }
@@ -356,6 +324,21 @@ pub fn calibrate(st: State<App>) -> Result<(), String> {
         .lock()
         .unwrap()
         .calibrate_manual(pose, snap.pose_fresh, now_ms)?;
+
+    // FLUJO A: Calibración del Sistema "Ancla" del visualizador
+    let cam_arc = st.camera.clone();
+    let sink: Arc<dyn Fn(String, Vec<OscType>) -> Result<(), String> + Send + Sync> =
+        Arc::new(move |addr: String, args: Vec<OscType>| -> Result<(), String> {
+            let guard = cam_arc.lock().unwrap();
+            let c = guard.as_ref().ok_or("Sin conexión con VRChat")?;
+            c.send_raw(addr, args)
+        });
+
+    // El rig NO se ancla aquí: su origen (Iris_World_Root) está en la cabeza + 0.30 m, no donde esté la cámara ahora, y
+    // anclarlo con esta pose dejaba el gizmo desplazado una distancia constante. Solo se muestra el gizmo; el ancla se
+    // confirma desde la tarjeta del visualizador, con la cámara encajada sobre él (`visualizer_set_anchor`).
+    let _ = st.visualizer.activate(sink);
+
     Ok(())
 }
 
@@ -363,6 +346,15 @@ pub fn calibrate(st: State<App>) -> Result<(), String> {
 #[tauri::command]
 pub fn reset_defaults(st: State<App>) -> Result<(), String> {
     st.halt();
+    {
+        let cam_arc = st.camera.clone();
+        let sink = move |addr: String, args: Vec<OscType>| -> Result<(), String> {
+            let guard = cam_arc.lock().unwrap();
+            let c = guard.as_ref().ok_or("Sin conexión con VRChat")?;
+            c.send_raw(addr, args)
+        };
+        let _ = st.visualizer.reset_anchor(&sink);
+    }
     st.camera.lock().unwrap().as_ref().ok_or("sin conexión con VRChat")?.reset()?;
     *st.last.lock().unwrap() = None;
     Ok(())
@@ -473,7 +465,7 @@ pub fn play_motion(name: String, app: AppHandle, st: State<App>) -> Result<(), S
         let cam = cam.as_ref().ok_or("sin conexión con VRChat")?;
         cam.pose(&pose)?;
         if let Some(z) = o.sample.zoom.filter(|z| z.is_finite()) {
-            let _ = cam.set("Zoom", Value::F(z));
+            let _ = cam.set_paced("Zoom", Value::F(z), o.last);
         }
         Ok(())
     }));
@@ -699,21 +691,35 @@ pub fn evaluate_sequence(
             && cam.state.lock().unwrap().open
         {
             let _ = cam.set("LookAtMe", Value::B(false));
-                let _ = cam.pose(&frame.final_pose);
-                if let Some(z) = frame.zoom.filter(|z| z.is_finite()) {
-                    let _ = cam.set("Zoom", Value::F(z));
-                }
-                if let Some(e) = frame.exposure.filter(|e| e.is_finite()) {
-                    let _ = cam.set("Exposure", Value::F(e));
-                }
-                if let Some(fd) = frame.focal_distance.filter(|fd| fd.is_finite()) {
-                    let _ = cam.set("FocalDistance", Value::F(fd));
-                }
-                if let Some(ap) = frame.aperture.filter(|ap| ap.is_finite()) {
-                    let _ = cam.set("Aperture", Value::F(ap));
-                }
+            let _ = cam.pose(&frame.final_pose);
+            if let Some(z) = frame.zoom.filter(|z| z.is_finite()) {
+                let _ = cam.set("Zoom", Value::F(z));
+            }
+            if let Some(e) = frame.exposure.filter(|e| e.is_finite()) {
+                let _ = cam.set("Exposure", Value::F(e));
+            }
+            if let Some(fd) = frame.focal_distance.filter(|fd| fd.is_finite()) {
+                let _ = cam.set("FocalDistance", Value::F(fd));
+            }
+            if let Some(ap) = frame.aperture.filter(|ap| ap.is_finite()) {
+                let _ = cam.set("Aperture", Value::F(ap));
+            }
         }
     }
+
+    // FLUJO C: Sincronización en tiempo real del visualizador de cámara
+    if st.visualizer.enabled.load(Ordering::Relaxed) {
+        let cam_arc = st.camera.clone();
+        let _ = st.visualizer.sync_camera_frame(&frame.final_pose, &move |msgs| {
+            let guard = cam_arc.lock().unwrap();
+            let c = guard.as_ref().ok_or("Sin conexión con VRChat")?;
+            for msg in msgs {
+                let _ = c.send_raw(msg.addr, msg.args);
+            }
+            Ok(())
+        });
+    }
+
     Ok(frame)
 }
 
@@ -768,7 +774,8 @@ pub fn play_sequence_internal(
 
     let cal_cfg = project.calibration;
     let app_clone = app.clone();
-    let runner = StudioRunner::start(project, anchor, start_time, looping, live_osc, move |ev, send_osc| {
+    let mut closed_since: Option<std::time::Instant> = None;
+    let runner = StudioRunner::start(project, anchor, start_time, looping, live_osc, move |ev, send_osc, flush| {
         if !send_osc {
             return Ok(());
         }
@@ -788,21 +795,51 @@ pub fn play_sequence_internal(
             }
         }
         st.anchor_mgr.lock().unwrap().record_commanded_pose(pose_to_send, now_ms);
-        let cam = st.camera.lock().unwrap();
-        let cam = cam.as_ref().ok_or("Se perdió la conexión con VRChat")?;
-        cam.pose(&pose_to_send)?;
-        if let Some(z) = ev.zoom.filter(|z| z.is_finite()) {
-            let _ = cam.set("Zoom", Value::F(z));
+        // El guard de `camera` debe liberarse ANTES de sincronizar el visualizador: `sync_camera_frame` vuelve a
+        // tomar ese mismo Mutex (no reentrante) y, si el guard siguiera vivo, el hilo de 60 Hz se auto-bloquearía
+        // y toda la UI (que lee `camera` en `status`) se congelaría.
+        {
+            let cam_guard = st.camera.lock().unwrap_or_else(|e| e.into_inner());
+            let cam = cam_guard.as_ref().ok_or("Se perdió la conexión con VRChat")?;
+            if let Err(e) = cam.pose(&pose_to_send) {
+                // Un fallo transitorio (p. ej. eco `Mode 0` momentáneo) no debe abortar el recorrido: se omite el
+                // frame; la reproducción solo se detiene si la cámara sigue cerrada tras ~2 s (ver `closed_since`).
+                let since = *closed_since.get_or_insert_with(std::time::Instant::now);
+                if since.elapsed() > Duration::from_secs(2) {
+                    return Err(e);
+                }
+                return Ok(());
+            }
+            closed_since = None;
+            // VRChat encola estos sliders a 1 mensaje por frame: `set_paced` los limita (~30 Hz) y `flush` envía el final.
+            if let Some(z) = ev.zoom.filter(|z| z.is_finite()) {
+                let _ = cam.set_paced("Zoom", Value::F(z), flush);
+            }
+            if let Some(e) = ev.exposure.filter(|e| e.is_finite()) {
+                let _ = cam.set_paced("Exposure", Value::F(e), flush);
+            }
+            if let Some(fd) = ev.focal_distance.filter(|fd| fd.is_finite()) {
+                let _ = cam.set_paced("FocalDistance", Value::F(fd), flush);
+            }
+            if let Some(ap) = ev.aperture.filter(|ap| ap.is_finite()) {
+                let _ = cam.set_paced("Aperture", Value::F(ap), flush);
+            }
         }
-        if let Some(e) = ev.exposure.filter(|e| e.is_finite()) {
-            let _ = cam.set("Exposure", Value::F(e));
+
+        // FLUJO C: Sincronización en tiempo real a 60 Hz del visualizador de cámara
+        let app_st = app_clone.state::<App>();
+        if app_st.visualizer.enabled.load(Ordering::Relaxed) {
+            let cam_arc = app_st.camera.clone();
+            let _ = app_st.visualizer.sync_camera_frame(&pose_to_send, &move |msgs| {
+                let guard = cam_arc.lock().unwrap();
+                let c = guard.as_ref().ok_or("Sin conexión con VRChat")?;
+                for msg in msgs {
+                    let _ = c.send_raw(msg.addr, msg.args);
+                }
+                Ok(())
+            });
         }
-        if let Some(fd) = ev.focal_distance.filter(|fd| fd.is_finite()) {
-            let _ = cam.set("FocalDistance", Value::F(fd));
-        }
-        if let Some(ap) = ev.aperture.filter(|ap| ap.is_finite()) {
-            let _ = cam.set("Aperture", Value::F(ap));
-        }
+
         Ok(())
     });
 
@@ -1095,7 +1132,7 @@ pub fn export_vrc_dolly_cmd(project: SequenceProject, bake_effects: bool, st: St
     export_vrc_dolly_json(&project, anchor.as_ref(), bake_effects)
 }
 
-// ---------- Integración con Avatar de VRChat (VRCFury) y Corrección de Trayectoria ----------
+// ---------- Integración con el Rig Visualizador de VRChat (Avatars 3.0 / Unity) ----------
 
 /// Ajusta y escala proporcionalmente los keyframes para abarcar la duración objetivo (`target_duration`),
 /// evitando que el recorrido espacial se detenga prematuramente mientras los efectos de zoom continúan.
@@ -1113,40 +1150,166 @@ pub fn sample_base_pose_at(project: SequenceProject, time: f32, st: State<App>) 
     crate::studio::evaluator::sample_base_pose_at(&project, anchor.as_ref(), time)
 }
 
-/// Obtiene el estado actual y diagnóstico de la integración con el avatar de VRChat.
+/// Obtiene el estado actual y diagnóstico del Visualizador OSC / Rig de Avatar.
 #[tauri::command]
-pub fn avatar_status(st: State<App>) -> AvatarIntegrationSnapshot {
-    let service = st.avatar_service.lock().unwrap();
-    let anchor = st.current_anchor();
-    let current_time = st
-        .studio_runner
-        .lock()
-        .unwrap()
-        .as_ref()
-        .map(|r| r.status().current_time)
-        .unwrap_or(0.0);
-    service.snapshot(current_time, anchor.as_ref())
+pub fn visualizer_status(st: State<App>) -> VisualizerSnapshot {
+    st.visualizer.snapshot()
 }
 
-/// Obtiene la configuración de la integración con el avatar.
+/// Clava el Ancla del Visualizador en una posición dada o en la pose actual de la cámara (Flujo A).
 #[tauri::command]
-pub fn avatar_config(st: State<App>) -> AvatarIntegrationConfig {
-    st.avatar_service.lock().unwrap().config.clone()
+pub fn visualizer_set_anchor(anchor_pos: Option<[f32; 3]>, st: State<App>) -> Result<[f32; 3], String> {
+    let (anchor, pose_opt) = if let Some(p) = anchor_pos {
+        (Anchor { eye: p, yaw: 0.0 }, None)
+    } else {
+        let cam_guard = st.camera.lock().unwrap();
+        let cam = cam_guard.as_ref().ok_or("Sin conexión con VRChat")?;
+        let snap = cam.state.lock().unwrap().snapshot();
+        if !snap.rx_available {
+            return Err("Puerto de escucha UDP 9001 no disponible (¿otra app OSC abierta?). Cierra la otra app y reconecta.".into());
+        }
+        if !snap.open {
+            return Err("cámara cerrada: ábrela en VRChat".into());
+        }
+        let p = snap.pose.ok_or("VRChat aún no reporta la pose: mueve un poco la cámara")?;
+        let now_ms = snap.pose_epoch_ms.unwrap_or_else(now_epoch_ms);
+        (Anchor::from_pose(&p), Some((p, snap.pose_fresh, now_ms)))
+    };
+
+    // Si calibramos desde la pose de la cámara, sincronizamos también anchor_mgr
+    if let Some((pose, fresh, now_ms)) = pose_opt {
+        let _ = st.anchor_mgr.lock().unwrap().calibrate_manual(pose, fresh, now_ms);
+    }
+
+    let cam_arc = st.camera.clone();
+    let sink: Arc<dyn Fn(String, Vec<OscType>) -> Result<(), String> + Send + Sync> =
+        Arc::new(move |addr: String, args: Vec<OscType>| -> Result<(), String> {
+            let guard = cam_arc.lock().unwrap();
+            let c = guard.as_ref().ok_or("Sin conexión con VRChat")?;
+            c.send_raw(addr, args)
+        });
+
+    let res = st.visualizer.set_anchor(anchor, sink.clone())?.eye;
+
+    // Sincronización inicial de la cámara (Flujo C):
+    // Extraer pose liberando el lock de st.camera antes de invocar sync_camera_frame para evitar auto-deadlock
+    let initial_cam_pose = {
+        let guard = st.camera.lock().unwrap();
+        guard.as_ref().and_then(|c| c.state.lock().unwrap().pose)
+    };
+    if let Some(pose) = initial_cam_pose {
+        let cam_arc2 = st.camera.clone();
+        let _ = st.visualizer.sync_camera_frame(&pose, &move |msgs| {
+            let guard = cam_arc2.lock().unwrap();
+            let c = guard.as_ref().ok_or("Sin conexión con VRChat")?;
+            for msg in msgs {
+                let _ = c.send_raw(msg.addr, msg.args);
+            }
+            Ok(())
+        });
+    }
+
+    Ok(res)
 }
 
-/// Guarda y actualiza la configuración de la integración con el avatar.
+/// Muestra el gizmo de la cámara en el origen del rig para encajar encima la cámara de VRChat (Flujo A, paso 1).
 #[tauri::command]
-pub fn save_avatar_config(config: AvatarIntegrationConfig, st: State<App>) -> Result<AvatarIntegrationConfig, String> {
-    st.avatar_service.lock().unwrap().update_config(config.clone());
-    Ok(config)
+pub fn visualizer_activate(st: State<App>) -> Result<(), String> {
+    let cam_arc = st.camera.clone();
+    let sink: Arc<dyn Fn(String, Vec<OscType>) -> Result<(), String> + Send + Sync> =
+        Arc::new(move |addr: String, args: Vec<OscType>| -> Result<(), String> {
+            let guard = cam_arc.lock().unwrap();
+            let c = guard.as_ref().ok_or("Sin conexión con VRChat")?;
+            c.send_raw(addr, args)
+        });
+    st.visualizer.activate(sink)
 }
 
-/// Dispara manualmente una acción del avatar para diagnóstico desde la UI.
+/// Oculta/muestra el gizmo de cámara y el path en las cámaras de VRChat (`iris_hide_cam`, synced).
 #[tauri::command]
-pub fn trigger_avatar_action(action: i32, app: AppHandle, st: State<App>) -> Result<AvatarIntegrationSnapshot, String> {
-    let act = AvatarAction::from_i32(action).ok_or("Acción de avatar inválida")?;
-    st.trigger_avatar_action_internal(act, app.clone())?;
-    Ok(avatar_status(st))
+pub fn visualizer_set_hide_cam(hidden: bool, st: State<App>) -> Result<(), String> {
+    let cam_arc = st.camera.clone();
+    let sink = move |addr: String, args: Vec<OscType>| -> Result<(), String> {
+        let guard = cam_arc.lock().unwrap();
+        let c = guard.as_ref().ok_or("Sin conexión con VRChat")?;
+        c.send_raw(addr, args)
+    };
+    st.visualizer.set_hide_cam(hidden, &sink)
+}
+
+/// Resetea el Ancla del Visualizador (Flujo A Reset).
+#[tauri::command]
+pub fn visualizer_reset_anchor(st: State<App>) -> Result<(), String> {
+    let cam_arc = st.camera.clone();
+    let sink = move |addr: String, args: Vec<OscType>| -> Result<(), String> {
+        let guard = cam_arc.lock().unwrap();
+        let c = guard.as_ref().ok_or("Sin conexión con VRChat")?;
+        c.send_raw(addr, args)
+    };
+    st.visualizer.reset_anchor(&sink)
+}
+
+/// Encola la sincronización asíncrona del mesh del Path de 5 huesos (Flujo B).
+#[tauri::command]
+pub fn visualizer_sync_path(project: SequenceProject, st: State<App>) -> Result<(), String> {
+    let cam_arc = st.camera.clone();
+    let sink: Arc<dyn Fn(String, Vec<OscType>) -> Result<(), String> + Send + Sync> =
+        Arc::new(move |addr: String, args: Vec<OscType>| -> Result<(), String> {
+            let guard = cam_arc.lock().unwrap();
+            let c = guard.as_ref().ok_or("Sin conexión con VRChat")?;
+            c.send_raw(addr, args)
+        });
+    let active_anchor = st.current_anchor();
+    st.visualizer.queue_sync_path_mesh(&project, active_anchor.as_ref(), sink)
+}
+
+/// Sincroniza la cámara visualizadora en tiempo real mediante una ráfaga inmediata de OSC (Flujo C).
+#[tauri::command]
+pub fn visualizer_sync_camera(pose: Pose, st: State<App>) -> Result<(), String> {
+    let cam_arc = st.camera.clone();
+    st.visualizer
+        .sync_camera_frame(&pose, &move |msgs| {
+            let guard = cam_arc.lock().unwrap();
+            let c = guard.as_ref().ok_or("Sin conexión con VRChat")?;
+            for msg in msgs {
+                let _ = c.send_raw(msg.addr, msg.args);
+            }
+            Ok(())
+        })
+        .map(|_| ())
+}
+
+/// Ajuste fino del ancla: mueve el gizmo `d*` metros en ejes del rig y lo gira `dyaw` grados, y reenvía la última pose.
+#[tauri::command]
+pub fn visualizer_nudge(dx: f32, dy: f32, dz: f32, dyaw: f32, st: State<App>) -> Result<(), String> {
+    st.visualizer.nudge([dx, dy, dz], dyaw);
+    resend_visualizer(&st)
+}
+
+#[tauri::command]
+pub fn visualizer_reset_nudge(st: State<App>) -> Result<(), String> {
+    st.visualizer.reset_nudge();
+    resend_visualizer(&st)
+}
+
+fn resend_visualizer(st: &State<App>) -> Result<(), String> {
+    let cam_arc = st.camera.clone();
+    st.visualizer
+        .resend_last(&move |msgs| {
+            let guard = cam_arc.lock().unwrap();
+            let c = guard.as_ref().ok_or("Sin conexión con VRChat")?;
+            for msg in msgs {
+                let _ = c.send_raw(msg.addr, msg.args);
+            }
+            Ok(())
+        })
+        .map(|_| ())
+}
+
+/// Alias para compatibilidad con snapshot.
+#[tauri::command]
+pub fn avatar_status(st: State<App>) -> VisualizerSnapshot {
+    st.visualizer.snapshot()
 }
 
 
