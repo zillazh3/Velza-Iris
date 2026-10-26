@@ -557,7 +557,7 @@
   // Antes solo se sincronizaba al arrastrar un punto o con los botones de Ajustes. Si el rig no está anclado el backend
   // responde con un error que se ignora. La sincronización tarda ~3 s (parámetros synced); el backend descarta las viejas.
   let pathSyncTimer: ReturnType<typeof setTimeout> | null = null;
-  const PATH_RESYNC_MS = 15000;
+  const PATH_RESYNC_MS = 30000;
   // `$derived` de texto: `status` se reemplaza en cada sondeo (750 ms) y, leído dentro del effect, reiniciaría el debounce
   // sin parar; así el effect solo corre cuando cambia el CONTENIDO de la firma.
   const pathSignature = $derived(
@@ -583,9 +583,9 @@
     };
   });
 
-  // Reenvío periódico: los huesos del path se congelan uno a uno por parámetros, así que un jugador que entra tarde o un
-  // paquete perdido dejan el path viejo hasta la siguiente sincronización. Reenviar los mismos puntos no mueve nada y lo
-  // cura solo (≤ ~18 s). Con el rig apagado el backend responde con error, que se ignora.
+  // Reenvío periódico: los remotos reciben el path por el bus de red (sin canal de retorno, en bucle abierto), así que un jugador
+  // que entra tarde o un paquete perdido dejan el path viejo. Reenviar los mismos puntos no mueve nada y lo cura en el siguiente
+  // reenvío (≤ ~30 s + 12 s de ciclo). Con el rig apagado el backend responde con error, que se ignora.
   $effect(() => {
     const timer = setInterval(() => {
       void api.visualizerSyncPath($state.snapshot(activeProject) as SequenceProject).catch(() => {});
@@ -943,7 +943,7 @@
     // Actualización de la cámara en tiempo real
     void api.visualizerSyncCamera(kf.rawPose).catch(() => {});
 
-    // Debounce / Throttling para deformar el Path de 5 huesos de forma secuencial sin solapar iris_wp_index
+    // Debounce / Throttling del path: el dueño lo ve al instante y el bus de red lo manda a los remotos sin solapar envíos
     scheduleVisualizerPathSync();
   }
 

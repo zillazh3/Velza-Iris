@@ -37,19 +37,47 @@ cabeza en ese instante, y un remoto que cargaba el avatar con `iris_enable` ya e
 (captura de un 2º cliente: gizmo ~2.3 m más abajo que para el dueño). Un constraint sin fuente resuelta + FreezeToWorld toma la
 posición inicial del avatar, distinta por usuario (reporte conocido en feedback.vrchat.com). Sumar un offset fijo no lo arregla.
 
-Flujo: **Mostrar gizmo** (`visualizer_activate`) → `iris_enable = true`, ancla = (0,0,0) yaw 0 y manda la pose actual de la cámara.
+Flujo: **Mostrar gizmo** (`visualizer_activate`) → `iris_enable = true`, región en (0,0,0) y manda la pose actual de la cámara.
 Mover la cámara a mano o reproducir un recorrido mueve el gizmo en vivo. **Apagar gizmo** (`visualizer_reset_anchor`) lo oculta.
-Límite: ±50 m del origen del mundo (la app avisa); el ajuste fino de la tarjeta corrige un desfase residual del pivote del FBX
-(`CameraMeshPositionOffset` / `CameraMeshEulerOffset` en `VelzaIrisBuilder.cs` si el desfase es fijo).
-El path se reenvía solo: al cambiar puntos (debounce 0.8 s) y cada 15 s, para que quien entre tarde lo reciba.
+El ajuste fino de la tarjeta corrige un desfase residual del pivote del FBX (`CameraMeshPositionOffset` / `CameraMeshEulerOffset`
+en `VelzaIrisBuilder.cs` si el desfase es fijo).
 
-## Parámetros OSC (todos *synced*, 82 bits)
-`iris_enable` (bool), `iris_hide_cam` (bool), `iris_wp_index` (int 0..5), `iris_cam_x/y/z/rx/ry/rz` y `iris_wp_x/y/z` (float −1..1).
-Posición: 1.0 = 50 m. Rotación: 1.0 = 180°. Con 8 bits de sync la posición que ven *otros* jugadores avanza en pasos de ~0.4 m;
-el propietario del avatar ve el valor sin cuantizar.
+## Protocolo v2: dueño exacto, remotos por bus (82 → 42 bits sincronizados)
+Un float sincronizado llega a los demás en 8 bits (múltiplos de 1/127 sobre [−1, 1]) y a ~5-10 Hz: ±50 m daban 0.39 m de paso (0.2 m de
+error) y 1.41° en rotación. Se separan los canales con `IsLocal`:
 
-Como los parámetros son synced, el multiplexor de los 5 huesos usa `MuxTiming::REMOTE` (250/250/150 ms, ~3.3 s por sync) en vez de
-30/30/20 ms. Son valores estimados: calibrar con un segundo cliente.
+**Dueño** (parámetros *no* sincronizados, float32 exacto, 0 bits de red; los escribe la app por OSC): `iris_cam_x/y/z/rx/ry/rz`
+(pose en vivo, 1.0 = 50 m / 180°), `iris_reg_x/y/z` (centro de la región, 1.0 = 1000 m) y los 8 puntos de control `iris_pc_i_x/y/z`
+(posición, 1.0 = 50 m relativa al centro) e `iris_pr_i_x/y/z` (rotación desenvuelta, 1.0 = 360°). El path aparece al instante.
+
+**Remotos** (sincronizados, 42 bits: `iris_enable`, `iris_hide_cam`, `iris_net_slot` Int, `iris_net_x/y/z`, `iris_path_t`):
+- *Bus time-sliced*: por slot la app escribe `iris_net_x/y/z`, espera 250 ms, escribe `iris_net_slot = k` y espera 250 ms. En el FX
+  (`Iris_Net_Latch`) cada slot es un estado con un `VRCAvatarParameterDriver` que copia el bus al parámetro local del punto
+  (Sample & Hold) y que corre también en remotos; el dueño no lo ejecuta (`IsLocal = false` en la condición).
+- *Slots* (30): región, posición coarse ×8, rotación ×8, posición fine ×8, pose retenida (coarse/fine/rotación) y modo path/mano.
+  Orden de envío: región, coarse, rotaciones, fine (el path aparece rápido y se afina después). ~12 s el ciclo completo.
+- *Coarse + fine*: `c = q8(v)`, `f = q8((v − c)·254)`, `v ≈ c + f/254` ⇒ ~1.6 mm con ±50 m. La app precuantiza como la red y escribe el
+  centro del bin (k ± 0.02) para que redondeo o truncado den el mismo k. Rotaciones: solo coarse sobre ±360° (error máx. 1.4°).
+- *`iris_path_t`* (≤ 10 Hz, ya adelantado `0.12 s·dT/dt`): progreso sobre los 8 puntos. El gizmo remoto es
+  `Σ_i (Pc_i + Pf_i)·R·w_i(T_s)`, con `T_s` = `T` suavizado exponencialmente (`T_s' = k·T + (1−k)·T_s`, k = 0.15) y `w_i` la "tienda"
+  lineal de cada nudo (árboles 1D anidados; los pesos de un Direct Tree no pueden ser negativos, por eso el valor con signo va en un
+  árbol 1D interior). La rotación sale por AAP (`iris_g_r*`) hacia los `RotTree` de cuaterniones cada 45° entre −360° y +360°.
+- *Pose retenida*: con la cámara a mano quieta 300 ms (o tras un scrub) la app manda su pose por slots y el gizmo remoto se coloca ahí.
+- *Región móvil*: el centro se elige alrededor del path (rejilla de 7.9 m) o, si la cámara sale de ±40 m, alrededor de ella
+  (con enfriamiento de 5 s). Ya no hay límite de ±50 m del origen del mundo.
+- Sin canal de retorno no hay ack: el path se repite (la app lo reenvía al cambiar y cada 30 s). Un trabajo de pose o modo se cuela
+  entre slots de un ciclo largo, y un path nuevo aborta el viejo.
+- Los huesos del path ya no usan FreezeToWorld ni constraint de posición: su posición local es función pura de los parámetros (5 de los
+  8 puntos: índices 0, 2, 4, 5, 7), igual en todos los clientes y recuperable en cualquier momento.
+
+`MuxTiming::REMOTE` (250/250 ms) son valores estimados: calibrar con un segundo cliente (`tools/probe`, `tools/test_osc_sync.py`).
+
+## Look holográfico
+`Shaders/VelzaIris_HideFromCamera.shader` (mismo nombre, así los materiales del builder lo siguen usando) dibuja el gizmo y el path como
+holograma: pasada de profundidad + pasada aditiva con borde fresnel, líneas de escaneo que suben en espacio de mundo, parpadeo y glitch
+horizontal ocasional. Sin GrabPass (apto para PC). El color del material se mezcla con `_HoloTint` (cian) para no perder la flecha.
+Perillas por material: `_HoloTint`, `_TintMix`, `_Intensity`, `_Alpha` (brillo del cuerpo), `_RimPower`/`_RimStrength`, `_ScanDensity`/
+`_ScanSpeed`/`_ScanStrength`, `_Flicker`, `_Glitch`. Vista previa: `VelzaIrisBatch.Preview` renderiza PNG (corre sin `-nographics`).
 
 ## Ocultar de las cámaras de VRChat
 `iris_hide_cam` cambia los materiales del gizmo y del path entre la variante *show* y *hide*. La variante *hide* usa
@@ -57,8 +85,10 @@ Como los parámetros son synced, el multiplexor de los 5 huesos usa `MuxTiming::
 Al ser un parámetro synced oculta el rig tanto en tu cámara como en las de los demás. No funciona en Quest/Android (shaders custom).
 
 ## VRCFury
-`Velza Iris.prefab` lleva un **Full Controller** (FX + menú + parámetros) con los 12 parámetros OSC en *Global Parameters*
-(sin eso VRCFury les antepone `VF##_` y OSC dejaría de llegar). Ya no usa Armature Link a Head.
+`Velza Iris.prefab` lleva un **Full Controller** (FX + menú + parámetros) con todos los parámetros `iris_*` (OSC e internos) en
+*Global Parameters* (sin eso VRCFury les antepone `VF##_` y OSC, los drivers y los clips AAP dejarían de encontrarlos).
+Ya no usa Armature Link a Head. `Validate` comprueba coste (42 bits propios), bindings AAP y latch, y simula el FX completo
+(dueño, remoto con cuantización de 8 bits, pose retenida y avatar recargado); los constraints solo se evalúan en VRChat.
 Los clips usan rutas relativas a la raíz del prefab; VRCFury las reescribe donde se coloque.
 
 Menú de Unity:
@@ -72,7 +102,7 @@ Batchmode (Unity cerrado): `Unity.exe -batchmode -nographics -projectPath <proye
 1. Recorrido con Zoom de ~10 s: al llegar al final el zoom debe terminar junto con la pose (antes seguía varios segundos).
    Medición opcional: `cd tools/probe && cargo run -- lag Zoom,Pose 60 10`.
 2. Mostrar gizmo (sin calibrar). Mover la cámara a mano: el gizmo la sigue, también tras caminar lejos.
-3. Reproducir el recorrido: el gizmo recorre el path y el path de 5 huesos coincide con la trayectoria.
+3. Reproducir el recorrido: el gizmo recorre el path (8 puntos de control); el mesh de 5 huesos pasa por 5 de ellos.
 4. "Ocultar de cámaras": el gizmo desaparece en foto/stream/dron pero se ve en tu vista normal.
 5. Con un segundo cliente: ve el gizmo en el mismo sitio y a la misma altura que tú (antes lo veía hundido ~2.3 m) y el path
-   (los waypoints remotos tardan ~3 s en actualizarse; quien entra tarde lo recibe en ≤ ~18 s por el reenvío periódico).
+   (el path remoto tarda ~12 s en llegar la primera vez; quien entra tarde lo recibe en el siguiente reenvío, ≤ ~42 s; el gizmo se ve suavizado).

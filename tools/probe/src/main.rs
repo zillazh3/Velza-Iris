@@ -377,24 +377,21 @@ fn combo(a: &[String]) -> Res<()> {
     let mut handle = None;
     if with_avatar {
         send_to(&tx, VRC_SEND, "/avatar/parameters/iris_enable", vec![OscType::Bool(true)])?;
-        // Multiplexado del Path (mismos tiempos que avatar/service.rs) en un hilo aparte.
+        // Bus hacia los remotos (mismos tiempos que avatar/service.rs: datos -> 250 ms -> slot -> 250 ms) en un hilo aparte.
         let (tx, stop, cyc) = (tx.clone(), stop.clone(), mux_cycles.clone());
         handle = Some(std::thread::spawn(move || {
             let int = |a: &str, v: i32| send_to(&tx, VRC_SEND, a, vec![OscType::Int(v)]);
             let fl = |a: &str, v: f32| send_to(&tx, VRC_SEND, a, vec![OscType::Float(v)]);
             while !stop.load(Ordering::Relaxed) {
-                let _ = int("/avatar/parameters/iris_wp_index", 0);
-                std::thread::sleep(Duration::from_millis(25));
-                for i in 1..=5 {
+                for slot in 2..=9 {
                     for ax in ["x", "y", "z"] {
-                        let _ = fl(&format!("/avatar/parameters/iris_wp_{ax}"), i as f32 * 0.05);
+                        let _ = fl(&format!("/avatar/parameters/iris_net_{ax}"), slot as f32 * 0.05);
                     }
-                    std::thread::sleep(Duration::from_millis(30));
-                    let _ = int("/avatar/parameters/iris_wp_index", i);
-                    std::thread::sleep(Duration::from_millis(30));
-                    let _ = int("/avatar/parameters/iris_wp_index", 0);
-                    std::thread::sleep(Duration::from_millis(20));
+                    std::thread::sleep(Duration::from_millis(250));
+                    let _ = int("/avatar/parameters/iris_net_slot", slot);
+                    std::thread::sleep(Duration::from_millis(250));
                 }
+                let _ = int("/avatar/parameters/iris_net_slot", 0);
                 cyc.fetch_add(1, Ordering::Relaxed);
             }
         }));

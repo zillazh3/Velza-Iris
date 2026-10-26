@@ -1,35 +1,52 @@
 //! Servicio de integración cinemática y sincronización del Visualizador VRChat (Avatars 3.0 / Unity).
-//! Implementa los 3 flujos canónicos:
-//! - Flujo A: Calibración y Reseteo del Ancla (`SetAnchor` / `ResetAnchor`).
-//! - Flujo B: Deformación del Mesh del Path de 5 Huesos (`SyncPathMeshAsync`) con multiplexación temporal secuencial sin solapamiento.
-//! - Flujo C: Actualización en tiempo real a 60 Hz del Visualizador de Cámara (`SyncCameraVisualizerFrame`) vía OSC Bundles.
+//!
+//! Dos canales (ver `protocol.rs`):
+//! - **Dueño**: `iris_cam_*` a 60 Hz y los puntos del path en parámetros locales (float32 exacto, 0 bits de sync).
+//! - **Remotos**: bus time-sliced (`iris_net_slot` + `iris_net_x/y/z`), progreso `iris_path_t` y pose retenida.
+//!   Sin canal de retorno no hay ack: los datos se repiten en bucle abierto (el front reenvía el path cada 20 s).
 
 use super::config::VisualizerConfig;
+use super::net::{self, hold_slots, NetPath, SlotWrite};
 use super::protocol::*;
 use crate::anchor::Anchor;
 use crate::osc::protocol::Pose;
-use crate::studio::evaluator::sample_base_pose_at;
 use crate::studio::model::SequenceProject;
 use rosc::{OscMessage, OscType};
 use serde::{Deserialize, Serialize};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread::{spawn, JoinHandle};
-use std::collections::HashMap;
 use std::time::{Duration, Instant};
+
+type NetSink = Arc<dyn Fn(String, Vec<OscType>) -> Result<(), String> + Send + Sync>;
+
+/// `iris_path_t` hacia los remotos: como mucho a ~10 Hz (más rápido no llega, la red sincroniza a 5-10 Hz).
+const T_MIN_GAP: Duration = Duration::from_millis(100);
+/// El suavizado del cliente retrasa el gizmo remoto: se envía `T + LEAD · dT/dt` para compensarlo.
+const T_LEAD_S: f32 = 0.12;
+/// Quieta durante este tiempo, la pose de la cámara a mano se manda a los remotos como pose retenida.
+const HAND_QUIET: Duration = Duration::from_millis(300);
+/// Un recorrido se considera en curso mientras haya frames de reproducción más recientes que esto.
+const PLAYBACK_GRACE: Duration = Duration::from_millis(1000);
+/// Si la cámara se aleja más de esto del centro de la región, se recentra (el rango del dueño es ±50 m).
+const RECENTER_METERS: f32 = 40.0;
+const RECENTER_COOLDOWN: Duration = Duration::from_secs(5);
 
 /// Instantánea del estado del visualizador para la UI y diagnóstico.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VisualizerSnapshot {
     pub enabled: bool,
+    /// Centro de la región de trabajo (mundo, m); el gizmo y el path se expresan relativos a él.
     pub anchor_position: Option<[f32; 3]>,
     pub anchor_yaw: Option<f32>,
     pub hide_cam: bool,
     pub last_cam_pose: Option<Pose>,
     pub last_cam_normalized_pos: Option<[f32; 3]>,
     pub last_cam_normalized_rot: Option<[f32; 3]>,
+    /// Los 8 puntos de control del path (mundo).
     pub last_wp_samples: Option<Vec<[f32; 3]>>,
     pub is_syncing_path: bool,
     pub last_error: Option<String>,
@@ -37,6 +54,8 @@ pub struct VisualizerSnapshot {
     pub nudge_pos: [f32; 3],
     pub nudge_yaw: f32,
     pub diag: VizDiagSnapshot,
+    /// Qué ven los remotos: `"path"` (siguen `iris_path_t`) o `"hand"` (pose retenida).
+    pub net_mode: String,
 }
 
 /// Resultado de `sync_camera_frame`: qué pasó con la pose recibida.
@@ -107,40 +126,206 @@ fn camera_params(anchor: &Anchor, pose: &Pose) -> ([f32; 3], [f32; 3]) {
     (normalize_position(local.pos, [0.0; 3]), normalize_rotation(local.rot))
 }
 
-/// Mensaje de tarea para el worker de multiplexación de los 5 huesos.
-struct PathSyncJob {
-    version: u64,
-    samples: [[f32; 3]; 5],
-    anchor: [f32; 3],
-    timing: MuxTiming,
-    sink: Arc<dyn Fn(String, Vec<OscType>) -> Result<(), String> + Send + Sync>,
-}
-
-/// Esperas del multiplexor de huesos. Con parámetros synced los demás jugadores reciben los cambios a unos ~10 Hz:
-/// con los tiempos locales (30 ms) el `wp_index` transitorio ni llega y los waypoints remotos quedan sin mover.
+/// Esperas del bus hacia los remotos. Con parámetros synced los demás jugadores reciben los cambios a unos ~5-10 Hz:
+/// los datos deben llevar estables más de un tick antes de cambiar el selector, y el selector debe durar más de un tick.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MuxTiming {
-    /// Tras escribir `wp_x/y/z` (el BlendTree posiciona `WP_Target`).
-    pub settle_ms: u64,
-    /// Con `wp_index = i` (el constraint del hueso salta a `WP_Target`).
-    pub hold_ms: u64,
-    /// Con `wp_index = 0` (el hueso queda congelado en mundo).
-    pub freeze_ms: u64,
+    /// Tras escribir `iris_net_x/y/z` y antes de cambiar `iris_net_slot` (el remoto ya ve los datos estables).
+    pub data_ms: u64,
+    /// Con `iris_net_slot = k` (el remoto entra al estado de latch de ese slot).
+    pub slot_ms: u64,
 }
 
 impl MuxTiming {
-    /// Solo lo ve el propietario del avatar (params locales).
-    pub const LOCAL: MuxTiming = MuxTiming { settle_ms: 30, hold_ms: 30, freeze_ms: 20 };
-    /// Visible para otros jugadores. ponytail: valores estimados; calibrar con un segundo cliente (~3,3 s por sync).
-    pub const REMOTE: MuxTiming = MuxTiming { settle_ms: 250, hold_ms: 250, freeze_ms: 150 };
+    /// Para pruebas locales (sin red real).
+    pub const LOCAL: MuxTiming = MuxTiming { data_ms: 5, slot_ms: 5 };
+    /// Visible para otros jugadores. ponytail: valores estimados; calibrar con un segundo cliente (~0,5 s por slot).
+    pub const REMOTE: MuxTiming = MuxTiming { data_ms: 250, slot_ms: 250 };
+}
+
+/// Lo que ven los remotos.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NetMode {
+    /// Siguen `iris_path_t` sobre los puntos de control.
+    Path,
+    /// Muestran la pose retenida (cámara a mano o scrub).
+    Hand,
+}
+
+enum NetJob {
+    /// Región + puntos de control del proyecto.
+    Path(Vec<SlotWrite>),
+    /// Pose retenida (+ modo `Hand`).
+    Hold(Vec<SlotWrite>),
+    /// Cambio de modo a `Path`.
+    Mode(Vec<SlotWrite>),
+}
+
+impl NetJob {
+    fn rank(&self) -> usize {
+        match self {
+            NetJob::Path(_) => 0,
+            NetJob::Hold(_) => 1,
+            NetJob::Mode(_) => 2,
+        }
+    }
+}
+
+struct QueuedJob {
+    job: NetJob,
+    timing: MuxTiming,
+    sink: NetSink,
+}
+
+#[derive(Default)]
+struct TState {
+    last_k: Option<i32>,
+    last_at: Option<Instant>,
+    pending: Option<f32>,
+    prev: Option<(f32, Instant)>,
+}
+
+struct HandState {
+    pose: Option<Pose>,
+    changed_at: Instant,
+    sent: Option<Pose>,
+}
+
+/// Estado compartido con el hilo de mantenimiento (`net_tick_loop`).
+struct NetShared {
+    sink: Mutex<Option<NetSink>>,
+    path: Mutex<Option<NetPath>>,
+    mode: Mutex<NetMode>,
+    t: Mutex<TState>,
+    hand: Mutex<HandState>,
+    last_playback: Mutex<Option<Instant>>,
+    last_recenter: Mutex<Option<Instant>>,
+    enabled: Arc<AtomicBool>,
+    anchor_position: Arc<Mutex<Option<[f32; 3]>>>,
+    timing: MuxTiming,
+    jobs: Sender<QueuedJob>,
+    shutdown: AtomicBool,
+}
+
+impl NetShared {
+    fn region(&self) -> [f32; 3] {
+        self.anchor_position.lock().unwrap().unwrap_or([0.0; 3])
+    }
+
+    fn queue(&self, job: NetJob) {
+        let Some(sink) = self.sink.lock().unwrap().clone() else { return };
+        let _ = self.jobs.send(QueuedJob { job, timing: self.timing, sink });
+    }
+
+    fn playing(&self) -> bool {
+        self.last_playback.lock().unwrap().is_some_and(|a| a.elapsed() < PLAYBACK_GRACE)
+    }
+
+    /// Envía `iris_path_t` limitado a ~10 Hz y solo si cambió el escalón de red; el último valor pendiente lo vacía el tick.
+    fn send_t(&self, t: f32) {
+        let Some(sink) = self.sink.lock().unwrap().clone() else { return };
+        let v = 2.0 * t.clamp(0.0, 1.0) - 1.0;
+        let k = (v * NET_QUANT_STEPS).round() as i32;
+        {
+            let mut st = self.t.lock().unwrap();
+            if st.last_k == Some(k) {
+                st.pending = None;
+                return;
+            }
+            if st.last_at.is_some_and(|a| a.elapsed() < T_MIN_GAP) {
+                st.pending = Some(t);
+                return;
+            }
+            st.last_k = Some(k);
+            st.last_at = Some(Instant::now());
+            st.pending = None;
+        }
+        let _ = sink(ADDR_IRIS_PATH_T.into(), vec![OscType::Float(net_bin(v))]);
+    }
+
+    /// `T` con adelanto para compensar el suavizado exponencial del cliente.
+    fn lead(&self, t: f32) -> f32 {
+        let now = Instant::now();
+        let mut st = self.t.lock().unwrap();
+        let out = match st.prev {
+            Some((pt, at)) => {
+                let dt = now.duration_since(at).as_secs_f32();
+                if dt > 0.004 && dt < 0.5 {
+                    let dtdt = ((t - pt) / dt).clamp(-2.0, 2.0);
+                    (t + (T_LEAD_S * dtdt).clamp(-0.05, 0.05)).clamp(0.0, 1.0)
+                } else {
+                    t
+                }
+            }
+            None => t,
+        };
+        st.prev = Some((t, now));
+        out
+    }
+
+    fn set_mode_path(&self) {
+        let mut m = self.mode.lock().unwrap();
+        if *m != NetMode::Path {
+            *m = NetMode::Path;
+            drop(m);
+            self.queue(NetJob::Mode(vec![SlotWrite { slot: slot::MODE_PATH, data: [0.0; 3] }]));
+        }
+    }
+
+    fn note_hand(&self, pose: &Pose) {
+        let mut h = self.hand.lock().unwrap();
+        let moved = h.pose.map_or(true, |p| pose_differs(&p, pose));
+        if moved {
+            h.pose = Some(*pose);
+            h.changed_at = Instant::now();
+        }
+    }
+
+    /// Un paso del hilo de mantenimiento: vacía el `T` pendiente y manda la pose retenida cuando la cámara se quedó quieta.
+    fn tick(&self) {
+        if !self.enabled.load(Ordering::Relaxed) {
+            return;
+        }
+        let pending = self.t.lock().unwrap().pending;
+        if let Some(t) = pending {
+            let due = self.t.lock().unwrap().last_at.map_or(true, |a| a.elapsed() >= T_MIN_GAP);
+            if due {
+                self.send_t(t);
+            }
+        }
+        if self.playing() {
+            return;
+        }
+        let hold = {
+            let mut h = self.hand.lock().unwrap();
+            match h.pose {
+                Some(p) if h.changed_at.elapsed() >= HAND_QUIET && h.sent != Some(p) => {
+                    h.sent = Some(p);
+                    Some(p)
+                }
+                _ => None,
+            }
+        };
+        if let Some(pose) = hold {
+            let mut slots = hold_slots(self.region(), &pose);
+            slots.push(SlotWrite { slot: slot::MODE_HAND, data: [0.0; 3] });
+            *self.mode.lock().unwrap() = NetMode::Hand;
+            self.queue(NetJob::Hold(slots));
+        }
+    }
+}
+
+fn pose_differs(a: &Pose, b: &Pose) -> bool {
+    (0..3).any(|i| (a.pos[i] - b.pos[i]).abs() > 0.02) || (0..3).any(|i| (a.rot[i] - b.rot[i]).abs() > 0.5)
 }
 
 pub struct VisualizerService {
     pub config: VisualizerConfig,
     pub enabled: Arc<AtomicBool>,
+    /// Centro de la región de trabajo (mundo, m). El rig vive en el origen del mundo y `Iris_Region` se desplaza a este centro.
     pub anchor_position: Arc<Mutex<Option<[f32; 3]>>>,
-    /// Yaw (°) de la cámara al confirmar el ancla; los ejes del rig son los de ese yaw.
+    /// Yaw (°) del ancla; solo distinto de 0 en rigs con origen propio (el de producción no gira).
     pub anchor_yaw: Arc<Mutex<f32>>,
     /// Ajuste fino sobre el ancla confirmado: (desplazamiento del gizmo en ejes del rig en m, giro en °).
     anchor_nudge: Arc<Mutex<([f32; 3], f32)>>,
@@ -151,9 +336,15 @@ pub struct VisualizerService {
     pub last_wp_samples: Arc<Mutex<Option<Vec<[f32; 3]>>>>,
     pub is_syncing_path: Arc<AtomicBool>,
     pub last_error: Arc<Mutex<Option<String>>>,
-    path_version: Arc<AtomicU64>,
-    job_tx: Sender<PathSyncJob>,
+    net: Arc<NetShared>,
     _worker_handle: Option<JoinHandle<()>>,
+    _tick_handle: Option<JoinHandle<()>>,
+}
+
+impl Drop for VisualizerService {
+    fn drop(&mut self) {
+        self.net.shutdown.store(true, Ordering::SeqCst);
+    }
 }
 
 impl VisualizerService {
@@ -168,16 +359,34 @@ impl VisualizerService {
         let last_wp_samples = Arc::new(Mutex::new(None));
         let is_syncing_path = Arc::new(AtomicBool::new(false));
         let last_error = Arc::new(Mutex::new(None));
-        let path_version = Arc::new(AtomicU64::new(0));
 
-        let (job_tx, job_rx) = channel::<PathSyncJob>();
+        let (job_tx, job_rx) = channel::<QueuedJob>();
+
+        let net = Arc::new(NetShared {
+            sink: Mutex::new(None),
+            path: Mutex::new(None),
+            mode: Mutex::new(NetMode::Hand),
+            t: Mutex::new(TState::default()),
+            hand: Mutex::new(HandState { pose: None, changed_at: Instant::now(), sent: None }),
+            last_playback: Mutex::new(None),
+            last_recenter: Mutex::new(None),
+            enabled: enabled.clone(),
+            anchor_position: anchor_position.clone(),
+            timing: config.mux_timing,
+            jobs: job_tx,
+            shutdown: AtomicBool::new(false),
+        });
 
         let syncing_flag = is_syncing_path.clone();
-        let path_ver_counter = path_version.clone();
         let err_sink = last_error.clone();
+        let worker_handle = spawn(move || Self::net_worker(job_rx, syncing_flag, err_sink));
 
-        let worker_handle = spawn(move || {
-            Self::path_multiplexer_worker(job_rx, syncing_flag, path_ver_counter, err_sink);
+        let tick_net = net.clone();
+        let tick_handle = spawn(move || {
+            while !tick_net.shutdown.load(Ordering::Relaxed) {
+                tick_net.tick();
+                std::thread::sleep(Duration::from_millis(50));
+            }
         });
 
         VisualizerService {
@@ -192,99 +401,108 @@ impl VisualizerService {
             last_wp_samples,
             is_syncing_path,
             last_error,
-            path_version,
-            job_tx,
+            net,
             _worker_handle: Some(worker_handle),
+            _tick_handle: Some(tick_handle),
         }
     }
 
-    /// Hilo dedicado para el multiplexor del Path de 5 huesos.
-    /// Garantiza secuencialidad estricta con cerrojo lógico: nunca se solapan dos envíos.
-    fn path_multiplexer_worker(
-        rx: Receiver<PathSyncJob>,
-        syncing: Arc<AtomicBool>,
-        current_version: Arc<AtomicU64>,
-        err_sink: Arc<Mutex<Option<String>>>,
-    ) {
-        while let Ok(mut job) = rx.recv() {
-            // Drenar trabajos acumulados para tomar siempre la versión más reciente solicitada
-            while let Ok(newer) = rx.try_recv() {
-                job = newer;
+    /// Hilo dedicado al bus hacia los remotos. Garantiza secuencialidad estricta (nunca se solapan dos envíos) y, de lo
+    /// pendiente, ejecuta solo el trabajo más reciente de cada tipo (región+path, pose retenida, modo).
+    /// Un ciclo de path dura ~12 s: entre slot y slot atiende lo urgente (pose retenida y modo van al instante) y, si llega un
+    /// path más nuevo, aborta el viejo y empieza el nuevo.
+    fn net_worker(rx: Receiver<QueuedJob>, syncing: Arc<AtomicBool>, err_sink: Arc<Mutex<Option<String>>>) {
+        let mut carry: Vec<QueuedJob> = Vec::new();
+        loop {
+            if carry.is_empty() {
+                match rx.recv() {
+                    Ok(j) => carry.push(j),
+                    Err(_) => return,
+                }
             }
-
-            // Si hay una versión más nueva en cola, ignorar la obsoleta
-            let job_ver = job.version;
-            if job_ver < current_version.load(Ordering::Relaxed) {
-                continue;
+            while let Ok(j) = rx.try_recv() {
+                carry.push(j);
             }
-
+            let mut latest: [Option<QueuedJob>; 3] = [None, None, None];
+            for q in carry.drain(..) {
+                let r = q.job.rank();
+                latest[r] = Some(q);
+            }
             syncing.store(true, Ordering::SeqCst);
-
-            if let Err(e) = Self::execute_path_mesh_multiplexing(job.samples, job.anchor, job.timing, &*job.sink) {
-                *err_sink.lock().unwrap() = Some(format!("Error en multiplexación del Path: {}", e));
-            } else {
-                *err_sink.lock().unwrap() = None;
+            for q in latest.into_iter().flatten() {
+                let slots = match &q.job {
+                    NetJob::Path(s) | NetJob::Hold(s) | NetJob::Mode(s) => s,
+                };
+                let is_path = matches!(q.job, NetJob::Path(_));
+                let result = Self::execute_slots_with(slots, q.timing, &*q.sink, &mut || {
+                    if !is_path {
+                        return false;
+                    }
+                    let mut abort = false;
+                    while let Ok(j) = rx.try_recv() {
+                        if matches!(j.job, NetJob::Path(_)) {
+                            carry.push(j); // un path más nuevo reemplaza al que se está enviando
+                            abort = true;
+                        } else {
+                            let s = match &j.job {
+                                NetJob::Path(s) | NetJob::Hold(s) | NetJob::Mode(s) => s,
+                            };
+                            let _ = Self::execute_slots(s, j.timing, &*j.sink);
+                        }
+                    }
+                    abort
+                });
+                match result {
+                    Ok(()) => *err_sink.lock().unwrap() = None,
+                    Err(e) => *err_sink.lock().unwrap() = Some(format!("Error en el bus de red: {e}")),
+                }
             }
-
             syncing.store(false, Ordering::SeqCst);
         }
     }
 
-    /// Ejecuta el protocolo temporal exacto de multiplexación de los 5 huesos:
-    ///
-    /// 1. Enviar /avatar/parameters/iris_wp_index = 0 (int)
-    /// 2. Esperar 25 ms
-    /// 3. PARA i = 1 HASTA 5:
-    ///     a. Normalizar W[i] (`samples` ya en ejes del ancla; `anchor` es el origen a restar, normalmente 0)
-    ///     b. Enviar:
-    ///          /avatar/parameters/iris_wp_x = float(nx)
-    ///          /avatar/parameters/iris_wp_y = float(ny)
-    ///          /avatar/parameters/iris_wp_z = float(nz)
-    ///     c. Esperar `timing.settle_ms` (BlendTree posiciona WP_Target)
-    ///     d. Enviar:
-    ///          /avatar/parameters/iris_wp_index = int(i)
-    ///     e. Esperar `timing.hold_ms` (Constraint de Waypoint_0i salta a WP_Target)
-    ///     f. Enviar:
-    ///          /avatar/parameters/iris_wp_index = 0 (int)
-    ///     g. Esperar `timing.freeze_ms` (Waypoint_0i queda congelado en mundo con Weight=0)
-    pub fn execute_path_mesh_multiplexing(
-        samples: [[f32; 3]; 5],
-        anchor: [f32; 3],
+    /// Protocolo del bus hacia los remotos, por slot:
+    /// 1. escribir `iris_net_x/y/z`; 2. esperar `data_ms` (el remoto ya ve los datos estables);
+    /// 3. escribir `iris_net_slot = k` (el remoto latchea); 4. esperar `slot_ms`.
+    /// Al final `iris_net_slot = 0` para que un siguiente envío con el mismo primer slot vuelva a disparar el latch.
+    pub fn execute_slots(
+        slots: &[SlotWrite],
         timing: MuxTiming,
         sink: &(dyn Fn(String, Vec<OscType>) -> Result<(), String> + Send + Sync),
     ) -> Result<(), String> {
-        // Paso 1: Resetear índice a 0
-        sink(ADDR_IRIS_WP_INDEX.into(), vec![OscType::Int(0)])?;
+        Self::execute_slots_with(slots, timing, sink, &mut || false)
+    }
 
-        // Paso 2: Esperar 25 ms
-        std::thread::sleep(Duration::from_millis(25));
-
-        // Paso 3: Iterar los 5 huesos
-        for (idx, w_pos) in samples.iter().enumerate() {
-            let bone_num = (idx + 1) as i32;
-            let norm = normalize_position(*w_pos, anchor);
-
-            // a & b: Enviar coordenadas normalizadas del cursor
-            sink(ADDR_IRIS_WP_X.into(), vec![OscType::Float(norm[0])])?;
-            sink(ADDR_IRIS_WP_Y.into(), vec![OscType::Float(norm[1])])?;
-            sink(ADDR_IRIS_WP_Z.into(), vec![OscType::Float(norm[2])])?;
-
-            // c: Esperar settle
-            std::thread::sleep(Duration::from_millis(timing.settle_ms));
-
-            // d: Enviar índice del hueso activo
-            sink(ADDR_IRIS_WP_INDEX.into(), vec![OscType::Int(bone_num)])?;
-
-            // e: Esperar hold
-            std::thread::sleep(Duration::from_millis(timing.hold_ms));
-
-            // f: Enviar índice 0 para congelar el hueso en su lugar
-            sink(ADDR_IRIS_WP_INDEX.into(), vec![OscType::Int(0)])?;
-
-            // g: Esperar freeze
-            std::thread::sleep(Duration::from_millis(timing.freeze_ms));
+    /// Igual que `execute_slots`; `between` se llama tras cada slot y puede abortar el envío devolviendo `true`.
+    fn execute_slots_with(
+        slots: &[SlotWrite],
+        timing: MuxTiming,
+        sink: &(dyn Fn(String, Vec<OscType>) -> Result<(), String> + Send + Sync),
+        between: &mut dyn FnMut() -> bool,
+    ) -> Result<(), String> {
+        for s in slots {
+            for (addr, v) in [ADDR_IRIS_NET_X, ADDR_IRIS_NET_Y, ADDR_IRIS_NET_Z].iter().zip(s.data) {
+                sink((*addr).into(), vec![OscType::Float(v)])?;
+            }
+            std::thread::sleep(Duration::from_millis(timing.data_ms));
+            sink(ADDR_IRIS_NET_SLOT.into(), vec![OscType::Int(s.slot)])?;
+            std::thread::sleep(Duration::from_millis(timing.slot_ms));
+            if between() {
+                break;
+            }
         }
+        sink(ADDR_IRIS_NET_SLOT.into(), vec![OscType::Int(0)])
+    }
 
+    /// Escribe parámetros locales del dueño en tandas con una pausa corta (una ráfaga de ~50 mensajes seguidos podría
+    /// perderse en el socket de VRChat).
+    fn send_owner_writes(sink: &NetSink, writes: &[(String, f32)]) -> Result<(), String> {
+        for (n, (addr, v)) in writes.iter().enumerate() {
+            sink(addr.clone(), vec![OscType::Float(*v)])?;
+            if n % 12 == 11 {
+                std::thread::sleep(Duration::from_millis(3));
+            }
+        }
         Ok(())
     }
 
@@ -307,6 +525,10 @@ impl VisualizerService {
             }
             _ => (None, None),
         };
+        let net_mode = match *self.net.mode.lock().unwrap() {
+            NetMode::Path => "path",
+            NetMode::Hand => "hand",
+        };
 
         VisualizerSnapshot {
             enabled,
@@ -322,30 +544,26 @@ impl VisualizerService {
             nudge_pos,
             nudge_yaw,
             diag: self.diag_snapshot(),
+            net_mode: net_mode.to_string(),
         }
     }
 
-    /// Ancla arbitraria (solo pruebas y rigs con origen propio; el rig de producción usa el origen del mundo, ver `activate`).
+    /// Ancla arbitraria (solo pruebas y rigs con origen propio; el rig de producción usa el centro de región, ver `activate`).
     ///
     /// 1. Si estaba activo, envía iris_enable = false y iris_wp_index = 0, esperando 50 ms.
     /// 2. Captura anchorPosition.
     /// 3. Envía iris_enable = true.
     /// 4. Espera 50 ms.
-    pub fn set_anchor(
-        &self,
-        anchor: Anchor,
-        sink: Arc<dyn Fn(String, Vec<OscType>) -> Result<(), String> + Send + Sync>,
-    ) -> Result<Anchor, String> {
+    pub fn set_anchor(&self, anchor: Anchor, sink: NetSink) -> Result<Anchor, String> {
         if !anchor.eye.iter().all(|x| x.is_finite()) || !anchor.yaw.is_finite() {
             return Err("Ancla no finita (NaN o Inf)".into());
         }
 
-        // NUNCA se apaga `iris_enable` aquí: soltaría y volvería a congelar `Iris_World_Root`, que saltaría a otro sitio
-        // y el mesh dejaría de coincidir con el gizmo sobre el que se calibró. Sí se REenvía `true`: si ya estaba
-        // encendido en VRChat es un no-op, y si el avatar se recargó (arranca en false) lo repara.
+        // Se REenvía `true`: si ya estaba encendido en VRChat es un no-op, y si el avatar se recargó (arranca en false) lo repara.
         let was_enabled = self.enabled.load(Ordering::SeqCst);
         sink(ADDR_IRIS_ENABLE.into(), vec![OscType::Bool(true)])?;
         self.enabled.store(true, Ordering::SeqCst);
+        *self.net.sink.lock().unwrap() = Some(sink);
         if !was_enabled {
             std::thread::sleep(Duration::from_millis(50));
         }
@@ -358,23 +576,40 @@ impl VisualizerService {
         Ok(anchor)
     }
 
-    /// Enciende el rig. `Iris_World_Root` vive en el ORIGEN DEL MUNDO (constraint con fuente fuera de la escena), así que
-    /// el ancla es siempre (0,0,0) con yaw 0: la pose de mundo de la cámara de VRChat es directamente la del gizmo, sin
-    /// calibrar y con la misma referencia para todos los clientes. El ajuste fino (`nudge`) se conserva.
+    /// Enciende el rig. `Iris_World_Root` vive en el origen del mundo y `Iris_Region` se desplaza al centro de la región:
+    /// la pose de mundo de la cámara de VRChat es directamente la del gizmo, sin calibrar y con la misma referencia para
+    /// todos los clientes. El ajuste fino (`nudge`) se conserva.
     /// Es una acción explícita: SIEMPRE reenvía (si el avatar se recargó, `iris_enable` volvió a false en VRChat
-    /// aunque la app siga creyendo que el rig está encendido).
-    pub fn activate(
-        &self,
-        sink: Arc<dyn Fn(String, Vec<OscType>) -> Result<(), String> + Send + Sync>,
-    ) -> Result<(), String> {
+    /// aunque la app siga creyendo que el rig está encendido), incluidos el path y el modo de los remotos.
+    pub fn activate(&self, sink: NetSink) -> Result<(), String> {
         sink(ADDR_IRIS_ENABLE.into(), vec![OscType::Bool(true)])?;
         self.enabled.store(true, Ordering::SeqCst);
-        *self.anchor_position.lock().unwrap() = Some([0.0; 3]);
+        *self.net.sink.lock().unwrap() = Some(sink.clone());
+        let region = {
+            let mut a = self.anchor_position.lock().unwrap();
+            *a.get_or_insert([0.0; 3])
+        };
         *self.anchor_yaw.lock().unwrap() = 0.0;
         // Sin esto el siguiente eco de pose caería en el deadband y el gizmo se quedaría en 0 hasta que la cámara se mueva.
         *self.last_cam_pose.lock().unwrap() = None;
-        for addr in [ADDR_IRIS_CAM_X, ADDR_IRIS_CAM_Y, ADDR_IRIS_CAM_Z, ADDR_IRIS_CAM_RX, ADDR_IRIS_CAM_RY, ADDR_IRIS_CAM_RZ] {
-            sink(addr.into(), vec![OscType::Float(0.0)])?;
+        let mut writes: Vec<(String, f32)> = [ADDR_IRIS_CAM_X, ADDR_IRIS_CAM_Y, ADDR_IRIS_CAM_Z, ADDR_IRIS_CAM_RX, ADDR_IRIS_CAM_RY, ADDR_IRIS_CAM_RZ]
+            .iter()
+            .map(|a| (a.to_string(), 0.0))
+            .collect();
+        let path = self.net.path.lock().unwrap().clone();
+        match &path {
+            Some(p) => writes.extend(p.owner_writes()),
+            None => writes.extend(net::region_writes(region)),
+        }
+        Self::send_owner_writes(&sink, &writes)?;
+        // Los remotos pierden todo al recargar el avatar: reenviar región + path y volver a mostrar la pose.
+        self.net.hand.lock().unwrap().sent = None;
+        match path {
+            Some(p) => self.net.queue(NetJob::Path(p.slots())),
+            None => self.net.queue(NetJob::Path(vec![SlotWrite { slot: slot::REGION, data: net::region_bus(region) }])),
+        }
+        if *self.net.mode.lock().unwrap() == NetMode::Path {
+            self.net.queue(NetJob::Mode(vec![SlotWrite { slot: slot::MODE_PATH, data: [0.0; 3] }]));
         }
         Ok(())
     }
@@ -390,13 +625,13 @@ impl VisualizerService {
         Ok(())
     }
 
-    /// Ancla confirmada (posición + yaw de la cámara al calibrar), sin ajuste fino.
+    /// Ancla confirmada (centro de región + yaw), sin ajuste fino.
     pub fn raw_anchor(&self) -> Option<Anchor> {
         let eye = (*self.anchor_position.lock().unwrap())?;
         Some(Anchor { eye, yaw: *self.anchor_yaw.lock().unwrap() })
     }
 
-    /// Ancla EFECTIVA: la confirmada más el ajuste fino. Es la que usan la cámara, el path y el snapshot.
+    /// Ancla EFECTIVA: la confirmada más el ajuste fino. Es la que usan la cámara en vivo y el snapshot.
     /// Mover el gizmo `+d` en ejes del rig equivale a desplazar el origen `-d`, y girarlo `+dyaw` a girar el marco `-dyaw`.
     pub fn anchor(&self) -> Option<Anchor> {
         let raw = self.raw_anchor()?;
@@ -479,13 +714,12 @@ impl VisualizerService {
         }
     }
 
-    /// FLUJO A: Reseteo del Sistema "Ancla" (`ResetAnchor`).
+    /// Apaga el rig (`iris_enable = false`); el path de la app se conserva para volver a mostrarlo.
     pub fn reset_anchor(
         &self,
         sink: &(dyn Fn(String, Vec<OscType>) -> Result<(), String> + Send + Sync),
     ) -> Result<(), String> {
         let _ = sink(ADDR_IRIS_ENABLE.into(), vec![OscType::Bool(false)]);
-        let _ = sink(ADDR_IRIS_WP_INDEX.into(), vec![OscType::Int(0)]);
         self.enabled.store(false, Ordering::SeqCst);
         *self.anchor_position.lock().unwrap() = None;
         *self.anchor_yaw.lock().unwrap() = 0.0;
@@ -495,7 +729,7 @@ impl VisualizerService {
     }
 
     /// VRChat avisa con `/avatar/change` al cargar un avatar: los `iris_*` del avatar nuevo arrancan en sus defaults
-    /// (rig apagado, sin ancla), así que el estado de la app debe volver a "sin mostrar" para no creerlo encendido.
+    /// (rig apagado, sin región), así que el estado de la app debe volver a "sin mostrar" para no creerlo encendido.
     pub fn on_avatar_changed(&self) {
         self.enabled.store(false, Ordering::SeqCst);
         self.hide_cam.store(false, Ordering::SeqCst);
@@ -504,99 +738,111 @@ impl VisualizerService {
         *self.anchor_nudge.lock().unwrap() = ([0.0; 3], 0.0);
         *self.last_cam_pose.lock().unwrap() = None;
         self.diag.lock().unwrap().avatar_echo.clear();
+        *self.net.t.lock().unwrap() = TState::default();
+        self.net.hand.lock().unwrap().sent = None;
     }
 
-    /// Elige los 5 puntos del path de huesos a partir de los keyframes del proyecto (ver el cuerpo).
-    pub fn sample_5_waypoints(
+    /// Elige los 8 puntos de control del path a partir de los keyframes del proyecto (ver `net::sample_control_points`).
+    pub fn sample_control_points(
         project: &SequenceProject,
         active_anchor: Option<&Anchor>,
-        fallback_anchor_pos: [f32; 3],
-    ) -> [[f32; 3]; 5] {
-        if project.keyframes.is_empty() {
-            // Proyecto en blanco (p. ej. «Nueva secuencia»): sin recorrido. Los 5 huesos colapsan en el ancla (path de
-            // longitud cero) en vez de dibujar una línea inventada que parecería el recorrido del proyecto.
-            return [fallback_anchor_pos; 5];
-        }
-
-        let duration = project.duration.max(0.1);
-        let at = |t: f32| sample_base_pose_at(project, active_anchor, t.clamp(0.0, duration)).pos;
-
-        // El path real tiene solo 5 huesos (polilínea recta entre ellos): se colocan sobre los KEYFRAMES del proyecto,
-        // no en fracciones fijas del tiempo (que casi nunca coinciden con los puntos y cortan las esquinas).
-        let mut times: Vec<f32> = project.keyframes.iter().map(|k| k.time.clamp(0.0, duration)).collect();
-        times.sort_by(|a, b| a.total_cmp(b));
-        times.dedup_by(|a, b| (*a - *b).abs() < 1e-3);
-        let n = times.len();
-        let mut pts: Vec<(f32, [f32; 3])> = if n <= 1 {
-            // Un solo punto: 5 muestras equidistantes en el tiempo.
-            [0.0_f32, 0.25, 0.5, 0.75, 1.0].iter().map(|u| (u * duration, at(u * duration))).collect()
-        } else if n > 5 {
-            // Más de 5 keyframes: primero, último y tres repartidos entre ellos (siguen siendo keyframes reales).
-            (0..5)
-                .map(|i| {
-                    let t = times[((i * (n - 1)) as f32 / 4.0).round() as usize];
-                    (t, at(t))
-                })
-                .collect()
-        } else {
-            times.iter().map(|&t| (t, at(t))).collect()
-        };
-        // Menos de 5 keyframes: se subdivide el tramo MÁS LARGO (en distancia) hasta completar los 5 huesos.
-        let dist = |a: [f32; 3], b: [f32; 3]| ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)).sqrt();
-        while pts.len() < 5 {
-            let j = (0..pts.len() - 1)
-                .max_by(|&a, &b| dist(pts[a].1, pts[a + 1].1).total_cmp(&dist(pts[b].1, pts[b + 1].1)).then(b.cmp(&a)))
-                .unwrap_or(0);
-            let t = (pts[j].0 + pts[j + 1].0) * 0.5;
-            pts.insert(j + 1, (t, at(t)));
-        }
-
-        let mut samples = [[0.0; 3]; 5];
-        for (s, (_, p)) in samples.iter_mut().zip(pts) {
-            *s = p;
-        }
-        samples
+        fallback_pos: [f32; 3],
+    ) -> [(f32, Pose); NET_POINTS] {
+        net::sample_control_points(project, active_anchor, fallback_pos)
     }
 
-    /// FLUJO B: Encola la sincronización asíncrona no bloqueante del Path de 5 huesos (`SyncPathMeshAsync`).
+    /// Encola la sincronización del path: el dueño lo ve al instante (parámetros locales) y los remotos lo reciben por el
+    /// bus (`NetJob::Path`, ~0,5 s por slot). El centro de la región se elige alrededor del path.
     pub fn queue_sync_path_mesh(
         &self,
         project: &SequenceProject,
         active_anchor: Option<&Anchor>,
-        sink: Arc<dyn Fn(String, Vec<OscType>) -> Result<(), String> + Send + Sync>,
+        sink: NetSink,
     ) -> Result<(), String> {
-        let anchor = self
-            .anchor()
+        let current = self
+            .raw_anchor()
             .ok_or("El rig está apagado; pulsa «Mostrar gizmo» antes de sincronizar el Path")?;
+        let samples = net::sample_control_points(project, active_anchor, current.eye);
+        let path = NetPath::new(samples);
 
-        let samples = Self::sample_5_waypoints(project, active_anchor, anchor.eye);
+        *self.last_wp_samples.lock().unwrap() = Some(path.points.iter().map(|p| p.pos).collect());
+        *self.anchor_position.lock().unwrap() = Some(path.region);
+        *self.last_cam_pose.lock().unwrap() = None; // la pose en vivo ahora es relativa a otro centro
+        *self.net.sink.lock().unwrap() = Some(sink.clone());
+        *self.net.path.lock().unwrap() = Some(path.clone());
+        self.net.hand.lock().unwrap().sent = None;
 
-        // Guardar muestra (en mundo) para telemetría
-        *self.last_wp_samples.lock().unwrap() = Some(samples.to_vec());
-
-        // Los huesos viven bajo Iris_World_Root, cuyos ejes son los del yaw del ancla: se manda la posición en ese espacio.
-        let samples = samples.map(|p| anchor.world_to_local(&Pose { pos: p, rot: [0.0; 3] }).pos);
-
-        let next_ver = self.path_version.fetch_add(1, Ordering::SeqCst) + 1;
-        let job = PathSyncJob {
-            version: next_ver,
-            samples,
-            anchor: [0.0; 3],
-            timing: self.config.mux_timing,
-            sink,
-        };
-
-        let _ = self.job_tx.send(job);
+        Self::send_owner_writes(&sink, &path.owner_writes())?;
+        self.net.queue(NetJob::Path(path.slots()));
         Ok(())
     }
 
+    /// Recentra la región cuando la cámara se aleja de ella (el dueño solo cubre ±50 m alrededor del centro).
+    fn maybe_recenter(&self, pose: &Pose) {
+        let Some(c) = *self.anchor_position.lock().unwrap() else { return };
+        let far = (0..3).any(|a| (pose.pos[a] - c[a]).abs() > RECENTER_METERS);
+        if !far || self.net.last_recenter.lock().unwrap().is_some_and(|t| t.elapsed() < RECENTER_COOLDOWN) {
+            return;
+        }
+        let Some(sink) = self.net.sink.lock().unwrap().clone() else { return };
+        let region = snap_region(pose.pos);
+        if region == c {
+            return;
+        }
+        *self.net.last_recenter.lock().unwrap() = Some(Instant::now());
+        *self.anchor_position.lock().unwrap() = Some(region);
+        *self.last_cam_pose.lock().unwrap() = None;
+        self.net.hand.lock().unwrap().sent = None;
+        let slots = {
+            let mut p = self.net.path.lock().unwrap();
+            match p.as_mut() {
+                Some(path) => {
+                    path.region = region;
+                    let _ = Self::send_owner_writes(&sink, &path.owner_writes());
+                    path.slots()
+                }
+                None => {
+                    let _ = Self::send_owner_writes(&sink, &net::region_writes(region));
+                    vec![SlotWrite { slot: slot::REGION, data: net::region_bus(region) }]
+                }
+            }
+        };
+        self.net.queue(NetJob::Path(slots));
+    }
+
     /// FLUJO C: Actualización en Tiempo Real del Visualizador de Cámara (`SyncCameraVisualizerFrame`).
-    /// Genera y emite los 6 parámetros de la cámara en ráfaga inmediata.
+    /// Manda al dueño los 6 parámetros de la pose (local, exacta) y, para los remotos, la pose retenida cuando la cámara
+    /// se queda quieta (mano o scrub).
     pub fn sync_camera_frame(
         &self,
         pose: &Pose,
         frame_sink: &(dyn Fn(Vec<OscMessage>) -> Result<(), String> + Send + Sync),
     ) -> Result<SyncOutcome, String> {
+        self.net.note_hand(pose);
+        self.sync_inner(pose, frame_sink, false)
+    }
+
+    /// Igual que `sync_camera_frame` durante la reproducción de un recorrido: además manda a los remotos el progreso
+    /// `iris_path_t` (≤ 10 Hz) calculado con la pose base `path_pos` y el instante `time` del proyecto.
+    pub fn sync_playback(
+        &self,
+        pose: &Pose,
+        time: f32,
+        path_pos: [f32; 3],
+        frame_sink: &(dyn Fn(Vec<OscMessage>) -> Result<(), String> + Send + Sync),
+    ) -> Result<SyncOutcome, String> {
+        if self.enabled.load(Ordering::Relaxed) {
+            *self.net.last_playback.lock().unwrap() = Some(Instant::now());
+            let t = self.net.path.lock().unwrap().as_ref().map(|p| p.path_t(time, path_pos));
+            match t {
+                Some(t) => {
+                    self.net.set_mode_path();
+                    let t = self.net.lead(t);
+                    self.net.send_t(t);
+                }
+                None => self.net.note_hand(pose),
+            }
+        }
         self.sync_inner(pose, frame_sink, false)
     }
 
@@ -611,7 +857,8 @@ impl VisualizerService {
             self.note_skip(SkipReason::Disabled);
             return Ok(SyncOutcome::Disabled);
         }
-        // Sin ancla confirmada el rig sigue mostrando el gizmo en su origen: no hay referencia contra la que expresar la pose.
+        self.maybe_recenter(pose);
+        // Sin ancla el rig sigue apagado: no hay referencia contra la que expresar la pose.
         let Some(anchor) = self.anchor() else {
             self.note_skip(SkipReason::NoAnchor);
             return Ok(SyncOutcome::NoAnchor);
@@ -638,32 +885,17 @@ impl VisualizerService {
 
         let (norm_pos, norm_rot) = camera_params(&anchor, pose);
 
-        let messages = vec![
-            OscMessage {
-                addr: ADDR_IRIS_CAM_X.into(),
-                args: vec![OscType::Float(norm_pos[0])],
-            },
-            OscMessage {
-                addr: ADDR_IRIS_CAM_Y.into(),
-                args: vec![OscType::Float(norm_pos[1])],
-            },
-            OscMessage {
-                addr: ADDR_IRIS_CAM_Z.into(),
-                args: vec![OscType::Float(norm_pos[2])],
-            },
-            OscMessage {
-                addr: ADDR_IRIS_CAM_RX.into(),
-                args: vec![OscType::Float(norm_rot[0])],
-            },
-            OscMessage {
-                addr: ADDR_IRIS_CAM_RY.into(),
-                args: vec![OscType::Float(norm_rot[1])],
-            },
-            OscMessage {
-                addr: ADDR_IRIS_CAM_RZ.into(),
-                args: vec![OscType::Float(norm_rot[2])],
-            },
-        ];
+        let messages = [
+            (ADDR_IRIS_CAM_X, norm_pos[0]),
+            (ADDR_IRIS_CAM_Y, norm_pos[1]),
+            (ADDR_IRIS_CAM_Z, norm_pos[2]),
+            (ADDR_IRIS_CAM_RX, norm_rot[0]),
+            (ADDR_IRIS_CAM_RY, norm_rot[1]),
+            (ADDR_IRIS_CAM_RZ, norm_rot[2]),
+        ]
+        .into_iter()
+        .map(|(addr, v)| OscMessage { addr: addr.into(), args: vec![OscType::Float(v)] })
+        .collect();
 
         match frame_sink(messages) {
             Ok(()) => {
