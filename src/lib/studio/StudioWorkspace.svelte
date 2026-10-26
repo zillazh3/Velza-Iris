@@ -1895,7 +1895,7 @@
   </header>
 
   {#if playbackStatus.error}
-    <p class="studio-alert error" role="alert">{playbackStatus.error}</p>
+    <p class="studio-alert error" role="alert">{localizeError(playbackStatus.error)}</p>
   {/if}
 
   {#if captureArmed}

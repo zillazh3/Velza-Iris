@@ -87,56 +87,111 @@ export function formatKeyframeLabel(label: string | null | undefined): string {
   }
 }
 
+type Rule = { re: RegExp; key: string; params?: (m: RegExpMatchArray) => Record<string, string> };
+
+/**
+ * Errores conocidos del backend (Rust) en español → llave `err.*`. Específicos antes que genéricos.
+ */
+const ERRORS: Rule[] = [
+  { re: /sin conexión con VRChat|No hay conexión activa con VRChat/i, key: "err.notConnected" },
+  { re: /Se perdió la conexión con VRChat/, key: "err.connectionLost" },
+  { re: /VRChat no apareció por OSCQuery/, key: "err.oscQueryNotFound" },
+  { re: /cámara cerrada: ábrela en VRChat|cámara de VRChat está cerrada/, key: "err.cameraClosed" },
+  { re: /Puerto de escucha UDP 9001|Puerto UDP 9001 no disponible/, key: "err.rxUnavailable" },
+  { re: /sin ancla: calibra primero/, key: "err.noAnchor" },
+  {
+    re: /aún no reporta la pose|Aún no recibimos la posición actual|aún no reporta una posición reciente|No pudimos leer la posición actual/,
+    key: "err.poseStale",
+  },
+  { re: /Mueve ligeramente tu cámara en VRChat sobre el objetivo/, key: "err.targetStale" },
+  { re: /Agrega al menos un punto en la línea de tiempo/, key: "err.needPointToPlay" },
+  { re: /Abre la cámara en VRChat para reproducir en vivo/, key: "err.cameraClosedPlay" },
+  { re: /Abre la cámara en VRChat antes de iniciar la grabación/, key: "err.cameraClosedRecord" },
+  { re: /No se recibieron movimientos de la cámara durante la grabación/, key: "err.noRecordedMovements" },
+  { re: /Detén el movimiento o secuencia/, key: "err.externalControlCalibrate" },
+  { re: /corresponde a (?:un movimiento comandado|un encuadre aplicado)/, key: "err.commandedEchoCalibrate" },
+  { re: /Conecta con VRChat antes de reproducir/, key: "err.connectToPlay" },
+  { re: /Conecta con VRChat antes de grabar/, key: "err.connectToRecord" },
+  { re: /^cámara ocupada/, key: "err.cameraBusy" },
+  { re: /^cámara cerrada/, key: "err.cameraClosed" },
+  { re: /No hay secuencia reproduciéndose/, key: "err.noSequencePlaying" },
+  { re: /no hay movimiento en curso/, key: "err.noMotionRunning" },
+  { re: /No hay grabación activa/, key: "err.noRecording" },
+  { re: /el preset no existe/, key: "err.presetNotFound" },
+  { re: /el movimiento (?:predefinido solicitado )?no existe/i, key: "err.motionNotFound" },
+  { re: /El rig está apagado/, key: "err.rigOff" },
+  { re: /^Error en el bus de red: (.*)$/, key: "err.netBus", params: (m) => ({ detail: m[1] }) },
+  { re: /valores no finitos|Ancla no finita/, key: "err.nonFinite" },
+  { re: /El nombre de la secuencia no puede estar vacío/, key: "err.sequenceNameEmpty" },
+  { re: /^name vacío/, key: "err.nameEmpty" },
+  { re: /La secuencia no tiene puntos para exportar/, key: "err.nothingToExport" },
+  {
+    re: /^Demasiados fotogramas clave \((\d+), máximo (\d+)\)/,
+    key: "err.tooManyKeyframes",
+    params: (m) => ({ count: m[1], max: m[2] }),
+  },
+  {
+    re: /^Demasiados efectos \((\d+), máximo (\d+)\)/,
+    key: "err.tooManyEffects",
+    params: (m) => ({ count: m[1], max: m[2] }),
+  },
+  {
+    re: /^(.+): tiempo (\S+) fuera de la duración/,
+    key: "err.keyframeOutOfRange",
+    params: (m) => ({ label: m[1], time: m[2] }),
+  },
+  {
+    re: /^Efecto (.+): inicio (\S+) fuera de la duración/,
+    key: "err.effectStartOutOfRange",
+    params: (m) => ({ id: m[1], start: m[2] }),
+  },
+  {
+    re: /^Efecto (.+): duración inválida \((.*)\)/,
+    key: "err.effectInvalidDuration",
+    params: (m) => ({ id: m[1], duration: m[2] }),
+  },
+  { re: /^schemaVersion (\S+) no soportado/, key: "err.unsupportedSchema", params: (m) => ({ version: m[1] }) },
+  { re: /^JSON inválido: (.*)$/s, key: "err.invalidJson", params: (m) => ({ detail: m[1] }) },
+  { re: /El archivo Camera Dolly no contiene puntos/, key: "err.dollyEmpty" },
+  { re: /No se encontró la lista 'Points'/, key: "err.dollyNoPoints" },
+  {
+    re: /^Estructura de puntos Camera Dolly inválida: (.*)$/s,
+    key: "err.dollyInvalid",
+    params: (m) => ({ detail: m[1] }),
+  },
+  { re: /Rotation\[\d\] inválido|Falta Rotation\.[XYZ]|Formato de Rotation en Camera Dolly/, key: "err.dollyRotation" },
+  {
+    re: /^(.+) no es escribible \((.*)\); puedes elegir/s,
+    key: "err.dirNotWritable",
+    params: (m) => ({ dir: m[1], detail: m[2] }),
+  },
+  { re: /^(.+): zoom (\S+) fuera de rango/, key: "err.zoomOutOfRange", params: (m) => ({ name: m[1], zoom: m[2] }) },
+  { re: /^(.+): duración fuera de rango/, key: "err.durationOutOfRange", params: (m) => ({ name: m[1] }) },
+  { re: /^(.+): distancia debe ser > 0/, key: "err.distancePositive", params: (m) => ({ name: m[1] }) },
+  { re: /^(.+) fuera de rango: (.+)$/, key: "err.outOfRange", params: (m) => ({ field: m[1], value: m[2] }) },
+];
+
+function localizeLine(line: string): string {
+  const trimmed = line.trim();
+  if (trimmed.startsWith("err.")) return t(trimmed);
+  // Las advertencias de carga vienen como "archivo.json: mensaje": el nombre se conserva tal cual.
+  const file = trimmed.match(/^\S+\.json: /)?.[0] ?? "";
+  const s = trimmed.slice(file.length);
+  for (const { re, key, params } of ERRORS) {
+    const m = s.match(re);
+    if (m) return file + t(key, params ? params(m) : {});
+  }
+  return line;
+}
+
 /**
  * Localiza mensajes de error técnicos retornados por el backend Tauri u operaciones de herramientas.
+ * Las advertencias de carga llegan unidas por saltos de línea: se traduce cada línea.
  */
 export function localizeError(err: unknown): string {
   if (!err) return "";
   const raw = typeof err === "string" ? err : err instanceof Error ? err.message : String(err);
-  const trimmed = raw.trim();
-
-  // Errores conocidos del backend
-  if (trimmed.includes("sin conexión con VRChat")) return t("err.notConnected");
-  if (trimmed.includes("cámara cerrada: ábrela en VRChat") || trimmed.includes("cámara de VRChat está cerrada")) {
-    return t("err.cameraClosed");
-  }
-  if (trimmed.includes("Puerto de escucha UDP 9001") || trimmed.includes("Puerto UDP 9001 no disponible")) {
-    return t("err.rxUnavailable");
-  }
-  if (trimmed.includes("sin ancla: calibra primero")) return t("err.noAnchor");
-  if (
-    trimmed.includes("aún no reporta la pose") ||
-    trimmed.includes("Aún no recibimos la posición actual") ||
-    trimmed.includes("aún no reporta una posición reciente")
-  ) {
-    return t("err.poseStale");
-  }
-  if (trimmed.includes("Mueve ligeramente tu cámara en VRChat sobre el objetivo")) {
-    return t("err.targetStale");
-  }
-  if (trimmed.includes("Agrega al menos un punto en la línea de tiempo")) {
-    return t("err.needPointToPlay");
-  }
-  if (trimmed.includes("Abre la cámara en VRChat para reproducir en vivo")) {
-    return t("err.cameraClosedPlay");
-  }
-  if (trimmed.includes("Abre la cámara en VRChat antes de iniciar la grabación")) {
-    return t("err.cameraClosedRecord");
-  }
-  if (trimmed.includes("No se recibieron movimientos de la cámara durante la grabación")) {
-    return t("err.noRecordedMovements");
-  }
-  if (trimmed.includes("Detén el movimiento o secuencia en curso")) {
-    return t("err.externalControlCalibrate");
-  }
-  if (trimmed.includes("corresponde a un movimiento comandado")) {
-    return t("err.commandedEchoCalibrate");
-  }
-  if (trimmed.startsWith("err.")) {
-    return t(trimmed);
-  }
-
-  return raw;
+  return raw.split("\n").map(localizeLine).join("\n").trim();
 }
 
 /**
