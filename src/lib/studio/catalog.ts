@@ -331,7 +331,7 @@ export function createDefaultHeroicKeyframes(anchor: Anchor | null = null): Keyf
 }
 
 export function createDefaultSequenceProject(
-  name = "Nueva Secuencia",
+  name = t("default.newProjectName"),
   anchor: Anchor | null = null,
   includeDefaultKeyframes = true,
 ): SequenceProject {

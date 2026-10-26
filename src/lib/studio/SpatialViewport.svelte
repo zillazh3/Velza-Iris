@@ -336,7 +336,7 @@
       >
         {t("studio.viewSide")}
       </button>
-      <button type="button" class="vp-btn" title="Restablecer vista" onclick={resetView}>
+      <button type="button" class="vp-btn" title={t("viewport.resetView")} onclick={resetView}>
         <Maximize2 size={13} />
       </button>
     </div>

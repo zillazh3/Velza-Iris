@@ -140,6 +140,47 @@ export function localizeError(err: unknown): string {
 }
 
 /**
+ * Localiza los motivos (`reason`) de telemetría/calibración que genera el backend en español.
+ * Las frases con valores se parsean con regex; lo desconocido se muestra tal cual.
+ */
+const REASONS: { re: RegExp; key: string; params?: (m: RegExpMatchArray) => Record<string, string> }[] = [
+  { re: /^Esperando conexión y apertura de cámara/, key: "reason.waitingConnection" },
+  { re: /^Sin lecturas recientes de \/usercamera\/Pose/, key: "reason.noRecentPose" },
+  { re: /^Ancla en transición/, key: "reason.anchorTransition" },
+  { re: /^Corrección adaptativa en pausa/, key: "reason.correctionPaused" },
+  { re: /^Sin conexión activa con VRChat/, key: "reason.noConnection" },
+  { re: /^Desconectado de VRChat/, key: "reason.disconnectedPreview" },
+  { re: /^Puerto UDP 9001 ocupado/, key: "reason.portBusy" },
+  { re: /^Modo Control Abierto/, key: "reason.openLoopMode" },
+  { re: /^Cámara cerrada en VRChat/, key: "reason.cameraClosed" },
+  { re: /^Cámara cerrada: VRChat no procesa/, key: "reason.cameraClosedNoPose" },
+  { re: /^Cámara abierta, pero VRChat aún no/, key: "reason.noFirstPose" },
+  { re: /^Sin lectura inicial de Pose/, key: "reason.noInitialPose" },
+  { re: /^Cámara estacionaria \(último eco hace ([\d.]+) s\)/, key: "reason.stationary", params: (m) => ({ s: m[1] }) },
+  { re: /^En espera de trayectoria activa/, key: "reason.waitingTrajectory" },
+  { re: /^Discrepancia externa detectada/, key: "reason.externalDiscrepancy" },
+  { re: /^Corrección congelada por discrepancia/, key: "reason.correctionFrozen" },
+  { re: /^Discrepancia alta \(([\d.]+) m\)/, key: "reason.highDiscrepancy", params: (m) => ({ m: m[1] }) },
+  {
+    re: /^Ajuste suave por residuo medido \(([\d.]+) mm, ([\d.]+)°\)/,
+    key: "reason.softAdjust",
+    params: (m) => ({ mm: m[1], deg: m[2] }),
+  },
+  { re: /^Calibración desactivada por el usuario/, key: "reason.calibrationOff" },
+  { re: /^Offsets técnicos\/visuales activos/, key: "reason.offsetsActive" },
+  { re: /^Restaur(?:ación|ado) manual/, key: "reason.manualReset" },
+];
+
+export function localizeReason(raw: string | null | undefined): string {
+  if (!raw) return "";
+  for (const { re, key, params } of REASONS) {
+    const m = raw.match(re);
+    if (m) return t(key, params ? params(m) : {});
+  }
+  return raw;
+}
+
+/**
  * Traduce nombres de presets integrados (seeds.json) manteniendo el identificador interno si es personalizado.
  */
 export function localizePresetName(name: string): string {

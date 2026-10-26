@@ -110,12 +110,15 @@
         <input
           type="text"
           class="title-input"
-          bind:value={keyframe.label}
-          oninput={onchange}
+          value={formatKeyframeLabel(keyframe.label)}
+          oninput={(e) => {
+            keyframe.label = e.currentTarget.value;
+            onchange();
+          }}
           title={t("quickEdit.editLabel")}
         />
       </div>
-      <button type="button" class="ghost icon-btn" onclick={onclose} aria-label="Cerrar">
+      <button type="button" class="ghost icon-btn" onclick={onclose} aria-label={t("studio.close")}>
         <X size={14} />
       </button>
     </div>
@@ -123,7 +126,7 @@
     <div class="pop-body">
       <div class="pop-row-two">
         <label class="pop-field">
-          <span class="pop-label">Tiempo (s)</span>
+          <span class="pop-label">{t("studio.timeSecField")}</span>
           <input
             type="number"
             min="0"
@@ -135,13 +138,13 @@
         </label>
 
         <label class="pop-field">
-          <span class="pop-label">Zoom (mm)</span>
+          <span class="pop-label">{t("studio.zoomMm")}</span>
           <input
             type="number"
             min="20"
             max="300"
             step="1"
-            placeholder="Sin cambio"
+            placeholder={t("studio.noChangePlaceholder")}
             value={keyframe.look?.zoom ?? ""}
             oninput={(e) => {
               const val = e.currentTarget.value.trim();
@@ -164,7 +167,7 @@
             title={t("quickEdit.curveBtn")}
             onclick={() => (showCurveEditor = true)}
           >
-            <Sparkles size={12} /> Curva Custom
+            <Sparkles size={12} /> {t("studio.customCurve")}
           </button>
         </div>
         <IrisSelect
