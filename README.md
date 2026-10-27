@@ -128,4 +128,6 @@ Velza Iris no usa telemetría ni conexión a internet: se comunica con VRChat po
 
 ## 📄 Licencia
 
-Distribuido bajo la licencia [MIT](LICENSE).
+Distribuido bajo la licencia [GNU GPL v3.0](LICENSE). Puedes usar, estudiar, modificar y compartir Velza Iris, pero cualquier versión modificada que distribuyas debe seguir siendo software libre bajo la misma licencia.
+
+> La versión `v0.1.0` se publicó antes del cambio de licencia y quien la descargó la conserva bajo MIT; el código desde este cambio está bajo GPL-3.0.

@@ -128,4 +128,6 @@ Velza Iris uses no telemetry and no internet connection: it talks to VRChat over
 
 ## 📄 License
 
-Released under the [MIT](LICENSE) license.
+Released under the [GNU GPL v3.0](LICENSE) license. You may use, study, modify and share Velza Iris, but any modified version you distribute must remain free software under the same license.
+
+> Version `v0.1.0` was published before the license change and remains available under MIT to those who downloaded it; code from this change onward is under GPL-3.0.
