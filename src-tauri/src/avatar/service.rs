@@ -201,6 +201,13 @@ struct NetShared {
     hand: Mutex<HandState>,
     last_playback: Mutex<Option<Instant>>,
     last_recenter: Mutex<Option<Instant>>,
+    /// Cuándo se encoló el último ciclo de path (para el keepalive).
+    last_cycle: Mutex<Option<Instant>>,
+    /// Mientras sea futuro, el path se reenvía en ciclos seguidos (entró un jugador).
+    boost_until: Mutex<Option<Instant>>,
+    keepalive: Duration,
+    /// `true` mientras el worker envía un trabajo (el mismo flag que `is_syncing_path`).
+    syncing: Arc<AtomicBool>,
     enabled: Arc<AtomicBool>,
     anchor_position: Arc<Mutex<Option<[f32; 3]>>>,
     timing: MuxTiming,
@@ -215,7 +222,33 @@ impl NetShared {
 
     fn queue(&self, job: NetJob) {
         let Some(sink) = self.sink.lock().unwrap().clone() else { return };
+        if matches!(job, NetJob::Path(_)) {
+            *self.last_cycle.lock().unwrap() = Some(Instant::now());
+        }
         let _ = self.jobs.send(QueuedJob { job, timing: self.timing, sink });
+    }
+
+    /// Los remotos no tienen historial: el path (y el modo) se reenvía solo, aunque la UI esté en otra vista.
+    /// Solo con el worker libre: un `Path` nuevo aborta el que se está enviando y reiniciaría el ciclo en bucle.
+    fn keepalive_tick(&self) {
+        if self.syncing.load(Ordering::SeqCst) {
+            return;
+        }
+        let boosted = self.boost_until.lock().unwrap().is_some_and(|t| Instant::now() < t);
+        let due = self.last_cycle.lock().unwrap().map_or(false, |a| a.elapsed() >= self.keepalive);
+        if !(boosted || due) {
+            return;
+        }
+        let slots = match self.path.lock().unwrap().as_ref() {
+            Some(p) => p.slots(),
+            None => vec![SlotWrite { slot: slot::REGION, data: net::region_bus(self.region()) }],
+        };
+        self.queue(NetJob::Path(slots));
+        if *self.mode.lock().unwrap() == NetMode::Path {
+            self.queue(NetJob::Mode(vec![SlotWrite { slot: slot::MODE_PATH, data: [0.0; 3] }]));
+        } else {
+            self.hand.lock().unwrap().sent = None; // el tick reenvía la pose retenida + MODE_HAND
+        }
     }
 
     fn playing(&self) -> bool {
@@ -287,7 +320,8 @@ impl NetShared {
         if !self.enabled.load(Ordering::Relaxed) {
             return;
         }
-        let pending = self.t.lock().unwrap().pending;
+        self.keepalive_tick();
+        let pending =self.t.lock().unwrap().pending;
         if let Some(t) = pending {
             let due = self.t.lock().unwrap().last_at.map_or(true, |a| a.elapsed() >= T_MIN_GAP);
             if due {
@@ -370,6 +404,10 @@ impl VisualizerService {
             hand: Mutex::new(HandState { pose: None, changed_at: Instant::now(), sent: None }),
             last_playback: Mutex::new(None),
             last_recenter: Mutex::new(None),
+            last_cycle: Mutex::new(None),
+            boost_until: Mutex::new(None),
+            keepalive: Duration::from_millis(config.keepalive_ms),
+            syncing: is_syncing_path.clone(),
             enabled: enabled.clone(),
             anchor_position: anchor_position.clone(),
             timing: config.mux_timing,
@@ -740,6 +778,12 @@ impl VisualizerService {
         self.diag.lock().unwrap().avatar_echo.clear();
         *self.net.t.lock().unwrap() = TState::default();
         self.net.hand.lock().unwrap().sent = None;
+    }
+
+    /// Entró un jugador a la instancia (lo avisa `vrclog`): su avatar tarda en cargar, así que el path se reenvía en ciclos
+    /// seguidos durante `join_boost_ms` en vez de esperar al keepalive.
+    pub fn note_player_joined(&self) {
+        *self.net.boost_until.lock().unwrap() = Some(Instant::now() + Duration::from_millis(self.config.join_boost_ms));
     }
 
     /// Elige los 8 puntos de control del path a partir de los keyframes del proyecto (ver `net::sample_control_points`).
