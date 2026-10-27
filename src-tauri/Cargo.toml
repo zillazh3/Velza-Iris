@@ -1,8 +1,8 @@
 [package]
 name = "velza-iris"
-version = "0.1.0"
+version = "0.1.1"
 description = "Cámara de VRChat por OSC"
-authors = ["Zilla"]
+authors = ["Zilla-ZH3"]
 license = "GPL-3.0-only"
 edition = "2024"
 
