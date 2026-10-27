@@ -8,11 +8,20 @@ pub mod osc;
 pub mod presets;
 pub mod storage;
 pub mod studio;
+pub mod vrclog;
+
+use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .manage(commands::App::new())
+        .setup(|app| {
+            // Alguien entró a la instancia: su avatar carga sin historial, así que se reenvía el path en ráfaga.
+            let handle = app.handle().clone();
+            vrclog::watch(move || handle.state::<commands::App>().visualizer.note_player_joined());
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             commands::connect,
             commands::status,

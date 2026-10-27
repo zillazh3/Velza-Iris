@@ -577,7 +577,6 @@
   // Antes solo se sincronizaba al arrastrar un punto o con los botones de Ajustes. Si el rig no está anclado el backend
   // responde con un error que se ignora. La sincronización tarda ~3 s (parámetros synced); el backend descarta las viejas.
   let pathSyncTimer: ReturnType<typeof setTimeout> | null = null;
-  const PATH_RESYNC_MS = 30000;
   // `$derived` de texto: `status` se reemplaza en cada sondeo (750 ms) y, leído dentro del effect, reiniciaría el debounce
   // sin parar; así el effect solo corre cuando cambia el CONTENIDO de la firma.
   const pathSignature = $derived(
@@ -605,15 +604,7 @@
     };
   });
 
-  // Reenvío periódico: los remotos reciben el path por el bus de red (sin canal de retorno, en bucle abierto), así que un jugador
-  // que entra tarde o un paquete perdido dejan el path viejo. Reenviar los mismos puntos no mueve nada y lo cura en el siguiente
-  // reenvío (≤ ~30 s + 12 s de ciclo). Con el rig apagado el backend responde con error, que se ignora.
-  $effect(() => {
-    const timer = setInterval(() => {
-      void api.visualizerSyncPath($state.snapshot(activeProject) as SequenceProject).catch(() => {});
-    }, PATH_RESYNC_MS);
-    return () => clearInterval(timer);
-  });
+  // El reenvío periódico para los que entran tarde vive en el backend (`NetShared::keepalive_tick`), no depende de la vista.
 
   // Vigilar Captura Armada: en cuanto llegue un nuevo paquete `/usercamera/Pose` de VRChat, capturar automáticamente
   $effect(() => {

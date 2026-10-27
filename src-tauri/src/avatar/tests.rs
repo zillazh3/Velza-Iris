@@ -929,3 +929,62 @@ fn test_31_a_newer_path_replaces_the_one_being_sent() {
     let ends = slots.iter().filter(|s| **s == slot::pos_f(NET_POINTS - 1)).count();
     assert_eq!((starts, ends), (2, 1), "el path viejo se aborta y solo el nuevo llega al final: {slots:?}");
 }
+
+fn cycle_ends(log: &Log) -> usize {
+    slot_writes(log).iter().filter(|s| **s == slot::pos_f(NET_POINTS - 1)).count()
+}
+
+/// Servicio con el rig encendido y un path ya enviado una vez (el ciclo inicial completo).
+fn service_with_path(keepalive_ms: u64, join_boost_ms: u64) -> (VisualizerService, Log) {
+    let config = VisualizerConfig { keepalive_ms, join_boost_ms, ..local_config() };
+    let service = VisualizerService::new(config);
+    let (log, sink) = logging_sink();
+    service.activate(sink.clone()).unwrap();
+    service.queue_sync_path_mesh(&project_with(&[(0.0, [0.0; 3]), (3.0, [10.0, 0.0, 0.0])], 3.0), None, sink).unwrap();
+    wait_until("primer ciclo", || cycle_ends(&log) >= 1);
+    (service, log)
+}
+
+#[test]
+fn test_32_keepalive_resends_path_and_mode_without_the_frontend() {
+    let (service, log) = service_with_path(100, 0);
+    wait_until("segundo ciclo por keepalive", || cycle_ends(&log) >= 2);
+
+    // En modo path el reenvío también lleva el modo (un jugador tardío arranca en pose retenida).
+    let frame_sink = msgs_sink(Arc::new(Mutex::new(vec![])));
+    let pos = [1.0, 0.0, 0.0];
+    service.sync_playback(&Pose { pos, rot: [0.0; 3] }, 0.3, pos, &frame_sink).unwrap();
+    wait_until("modo path inicial", || slot_writes(&log).contains(&slot::MODE_PATH));
+    let before = slot_writes(&log).iter().filter(|s| **s == slot::MODE_PATH).count();
+    wait_until("modo path reenviado por keepalive", || {
+        slot_writes(&log).iter().filter(|s| **s == slot::MODE_PATH).count() > before
+    });
+}
+
+#[test]
+fn test_33_player_joined_triggers_back_to_back_cycles_without_waiting_for_keepalive() {
+    let (service, log) = service_with_path(3_600_000, 3_000);
+    std::thread::sleep(Duration::from_millis(400));
+    assert_eq!(cycle_ends(&log), 1, "sin join ni keepalive vencido no hay reenvío");
+
+    service.note_player_joined();
+    wait_until("dos ciclos más tras el join", || cycle_ends(&log) >= 3);
+}
+
+#[test]
+fn test_34_keepalive_never_aborts_a_cycle_in_progress() {
+    let (service, log) = service_with_path(3_600_000, 3_000);
+    service.note_player_joined();
+    wait_until("tres ciclos", || cycle_ends(&log) >= 4);
+
+    // Cada REGION abre un ciclo: todos menos el último en curso deben llegar completos hasta pos_f(N-1).
+    let mut slots = slot_writes(&log);
+    if slots.starts_with(&[slot::REGION, slot::REGION]) {
+        slots.remove(0); // el REGION suelto de `activate`, previo al primer ciclo del path
+    }
+    let chunks: Vec<&[i32]> = slots.split_inclusive(|s| *s == slot::pos_f(NET_POINTS - 1)).collect();
+    for c in chunks.iter().take(cycle_ends(&log).min(chunks.len()) - 1) {
+        assert_eq!(c.first(), Some(&slot::REGION));
+        assert_eq!(c.len(), 1 + 3 * NET_POINTS, "ciclo incompleto: {c:?}");
+    }
+}
